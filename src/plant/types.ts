@@ -17,6 +17,7 @@ export type BranchSegment = {
   y2: number
   width: number
   depth: number
+  depthVisual: number
   visibility: number
   tone: number
 }
@@ -27,6 +28,7 @@ export type Leaf = {
   angle: number
   size: number
   vitality: number
+  depthVisual: number
 }
 
 export type FoliageAnchor = {
@@ -35,13 +37,36 @@ export type FoliageAnchor = {
   y: number
   angle: number
   terminal: boolean
+  depth: number
+  depthVisual: number
   visibility: number
 }
 
-export type FoliageCluster = {
+export type CrownRegion = {
+  anchorId: number
   x: number
   y: number
+  radiusX: number
+  radiusY: number
+  depthVisual: number
+  visibility: number
+  tone: number
+  vitality: number
   leaves: Leaf[]
+}
+
+export type AmbientParticle = {
+  x: number
+  y: number
+  size: number
+  alpha: number
+  depthVisual: number
+}
+
+export type PlantCrown = {
+  microBranches: BranchSegment[]
+  regions: CrownRegion[]
+  ambientParticles: AmbientParticle[]
 }
 
 export type PlantSkeleton = {

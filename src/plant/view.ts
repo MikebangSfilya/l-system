@@ -1,7 +1,7 @@
-import type { Bounds, BranchSegment, PlantSkeleton, ViewTransform } from './types.ts'
+import type { Bounds, BranchSegment, CrownRegion, PlantSkeleton, ViewTransform } from './types.ts'
 
-export function computeBounds(segments: BranchSegment[]): Bounds {
-  return segments.reduce(
+export function computeBounds(segments: BranchSegment[], regions: CrownRegion[] = []): Bounds {
+  const branchBounds = segments.reduce(
     (bounds, segment) => ({
       minX: Math.min(bounds.minX, segment.x1, segment.x2),
       minY: Math.min(bounds.minY, segment.y1, segment.y2),
@@ -10,6 +10,12 @@ export function computeBounds(segments: BranchSegment[]): Bounds {
     }),
     { minX: 0, minY: 0, maxX: 0, maxY: 0 },
   )
+  return regions.reduce((bounds, region) => ({
+    minX: Math.min(bounds.minX, region.x - region.radiusX),
+    minY: Math.min(bounds.minY, region.y - region.radiusY),
+    maxX: Math.max(bounds.maxX, region.x + region.radiusX),
+    maxY: Math.max(bounds.maxY, region.y + region.radiusY),
+  }), branchBounds)
 }
 
 export function computeViewTransform(
