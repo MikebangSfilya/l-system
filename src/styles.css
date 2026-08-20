@@ -1,0 +1,41 @@
+:root {
+  font-family: Inter, system-ui, sans-serif;
+  color: #263126;
+  background: #ddd8ca;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; }
+button, input { font: inherit; }
+
+main {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 700px);
+  gap: 24px;
+  width: min(1060px, calc(100% - 32px));
+  margin: 24px auto;
+}
+
+.controls, .preview {
+  padding: 20px;
+  border: 1px solid #c4bead;
+  border-radius: 12px;
+  background: #f8f6ef;
+}
+
+h1, h2 { margin: 0 0 20px; }
+.controls label { display: grid; grid-template-columns: 78px 1fr 42px; align-items: center; gap: 8px; margin: 12px 0; }
+.controls label:has(input[type='number']) { grid-template-columns: 78px 1fr; }
+input[type='range'] { width: 100%; accent-color: #537450; }
+input[type='number'] { width: 100%; padding: 6px 8px; }
+output { text-align: right; font-variant-numeric: tabular-nums; }
+button { width: 100%; padding: 8px; cursor: pointer; }
+.growth-presets { display: flex; gap: 6px; margin: 4px 0 18px; }
+.growth-presets button { width: auto; flex: 1; padding: 6px 2px; }
+.growth-presets button[aria-pressed='true'] { color: white; background: #537450; border-color: #537450; }
+pre { overflow: auto; padding: 12px; background: #ece8dc; font-size: 12px; }
+canvas { display: block; width: 100%; height: auto; border-radius: 8px; }
+
+@media (max-width: 760px) {
+  main { grid-template-columns: 1fr; }
+}
