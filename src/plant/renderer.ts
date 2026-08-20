@@ -9,6 +9,8 @@ function branchPath(ctx: CanvasRenderingContext2D, branch: BranchSegment) {
 }
 
 function renderBranches(ctx: CanvasRenderingContext2D, branches: BranchSegment[]) {
+  ctx.lineCap = 'butt'
+  ctx.lineJoin = 'round'
   for (const branch of branches.filter(({ visibility }) => visibility > 0).sort((a, b) => a.depthVisual - b.depthVisual)) {
     const depthWeight = 0.72 + branch.depthVisual * 0.34
     ctx.beginPath()
@@ -23,6 +25,7 @@ function renderBranches(ctx: CanvasRenderingContext2D, branches: BranchSegment[]
 }
 
 function renderMicroBranches(ctx: CanvasRenderingContext2D, branches: BranchSegment[]) {
+  ctx.lineCap = 'round'
   for (const near of [false, true]) {
     const layer = branches.filter((branch) => branch.visibility > 0 && (branch.depthVisual >= 0.5) === near)
     if (layer.length === 0) continue
@@ -60,28 +63,21 @@ export function renderPlant(
   ctx.translate(transform.rootX, transform.rootY)
   ctx.scale(transform.scale * plant.growthScale, -transform.scale * plant.growthScale)
   ctx.translate(-plant.root.x, -plant.root.y)
-  ctx.lineCap = 'round'
+  ctx.lineJoin = 'round'
 
   for (const region of crown.regions.filter(({ visibility }) => visibility > 0).sort((a, b) => a.depthVisual - b.depthVisual)) {
     ctx.save()
     ctx.translate(region.x, region.y)
     ctx.scale(region.radiusX, region.radiusY)
     const cloud = ctx.createRadialGradient(0, 0, 0, 0, 0, 1)
-    cloud.addColorStop(0, `hsla(${101 + region.tone * 18} 46% 42% / ${region.visibility * (0.12 + region.depthVisual * 0.1)})`)
-    cloud.addColorStop(0.55, `hsla(${96 + region.tone * 15} 42% 38% / ${region.visibility * 0.08})`)
+    cloud.addColorStop(0, `hsla(${101 + region.tone * 18} 46% 42% / ${region.visibility * (0.18 + region.depthVisual * 0.14)})`)
+    cloud.addColorStop(0.55, `hsla(${96 + region.tone * 15} 42% 38% / ${region.visibility * 0.12})`)
     cloud.addColorStop(1, 'rgba(59, 112, 48, 0)')
     ctx.fillStyle = cloud
     ctx.beginPath()
     ctx.arc(0, 0, 1, 0, Math.PI * 2)
     ctx.fill()
     ctx.restore()
-  }
-
-  for (const particle of crown.ambientParticles) {
-    ctx.beginPath()
-    ctx.arc(particle.x, particle.y, particle.size, 0, Math.PI * 2)
-    ctx.fillStyle = `rgba(65, 125, 52, ${particle.alpha * (0.45 + particle.depthVisual * 0.4)})`
-    ctx.fill()
   }
 
   renderBranches(ctx, plant.branches)
@@ -91,7 +87,7 @@ export function renderPlant(
     if (region.visibility <= 0 || region.leaves.length === 0) continue
     ctx.beginPath()
     for (const leaf of region.leaves) {
-      const radius = leaf.size * (0.28 + leaf.depthVisual * 0.22) * (0.55 + region.visibility * 0.45)
+      const radius = leaf.size * (0.4 + leaf.depthVisual * 0.28) * (0.55 + region.visibility * 0.45)
       ctx.moveTo(region.x + leaf.x + radius, region.y + leaf.y)
       ctx.arc(region.x + leaf.x, region.y + leaf.y, radius, 0, Math.PI * 2)
     }

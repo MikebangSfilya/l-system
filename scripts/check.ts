@@ -187,6 +187,11 @@ const curved = generate({ ...config, curvature: 1 })
 assert.notDeepEqual(blueprint(straight), blueprint(curved), 'curvature must change the stable blueprint')
 assert.deepEqual(topology(straight), topology(curved), 'curvature must bend existing branches without changing topology')
 assert.ok(allBranches(straight).every((branch) => branch.bendStrength === 0), 'zero curvature must remove branch bend')
+assert.equal(
+  straight.skeleton.branches.find((branch) => branch.level === 0)!.baseDirection,
+  curved.skeleton.branches.find((branch) => branch.level === 0)!.baseDirection,
+  'seeded trunk lean must remain independent from curvature',
+)
 assert.deepEqual([...new Set(allBranches(curved).map((branch) => branch.level))].sort(), [0, 1, 2, 3, 4], 'mature tree must expose every branch level')
 
 const curvedBranches = allBranches(curved)
@@ -228,6 +233,13 @@ const curvatureSweep = [0, 0.25, 0.5, 0.75, 1].map((curvature) => generate({ ...
 assert.ok(curvatureSweep.every((plant) => JSON.stringify(topology(plant)) === JSON.stringify(topology(curvatureSweep[0]))), 'curvature sweep must preserve hierarchy and branch count')
 assert.ok(curvatureSweep.map((plant) => average(allBranches(plant).map((branch) => branch.bendStrength)))
   .every((bend, index, bends) => index === 0 || bend > bends[index - 1]), 'curvature sweep must progressively increase smooth bend')
+const ageStart = generate({ ...config, seed: 1, phase: 3, phaseProgress: 0 })
+const ageEnd = generate({ ...config, seed: 1, phase: 3, phaseProgress: 1 })
+assert.ok(averageWidth(ageEnd, 2) > averageWidth(ageStart, 2) * 1.15, 'secondary branches must thicken during maturity')
+assert.ok(
+  averageWidth(ageEnd, 4) / averageWidth(ageStart, 4) < averageWidth(ageEnd, 2) / averageWidth(ageStart, 2),
+  'terminal branches must age less than secondary branches',
+)
 const lowVitality = generate({ ...config, vitality: 0 })
 const highVitality = generate({ ...config, vitality: 1 })
 assert.deepEqual(lowVitality.skeleton, highVitality.skeleton, 'vitality must not change the skeleton')
@@ -270,12 +282,10 @@ for (const seed of [1, 2, 3, 4, 5]) {
   const stages = ([0, 1, 2, 3] as PlantPhase[]).map((phase) => generate({ ...config, seed, phase, phaseProgress: 1 }))
   const bounds = plant.bounds
   const height = bounds.maxY - bounds.minY
-  const points = plant.skeleton.branches.flatMap((branch) => [[branch.x1, branch.y1], [branch.x2, branch.y2]])
   const span = (xs: number[]) => Math.max(...xs) - Math.min(...xs)
-  const upperWidth = span(points.filter(([, y]) => y >= bounds.minY + height * 0.6).map(([x]) => x))
-  const lowerWidth = span(points.filter(([, y]) => y < bounds.minY + height * 0.6).map(([x]) => x))
   const trunk = plant.skeleton.branches.filter((branch) => branch.level === 0)
   const terminal = allBranches(plant).filter((branch) => branch.level === 4)
+  const terminalWidth = span(plant.skeleton.foliageAnchors.filter((anchor) => anchor.terminal).map((anchor) => anchor.x))
   assert.ok(plant.skeleton.branches.every((branch) => branch.level === Math.min(branch.depth, 4)), `seed ${seed}: hierarchy must follow structural depth`)
   assert.ok(plant.crown.microBranches.every((branch) => branch.level === 4), `seed ${seed}: crown twigs must be terminal level`)
   assert.ok(trunk.every((branch) => Math.abs(angleDelta(Math.PI / 2, direction(branch))) <= 12 * Math.PI / 180 + 1e-10), `seed ${seed}: trunk must stay within its vertical limit`)
@@ -287,7 +297,8 @@ for (const seed of [1, 2, 3, 4, 5]) {
   }
   assert.ok(plant.skeleton.branches.filter((branch) => branch.depth <= 2).every((branch) => branch.y2 >= branch.y1), `seed ${seed}: major branches must grow upward`)
   assert.ok(bounds.maxX - bounds.minX <= height * 1.25, `seed ${seed}: silhouette must remain composed`)
-  assert.ok(upperWidth > lowerWidth, `seed ${seed}: crown must widen toward the top`)
+  assert.ok(bounds.maxX - bounds.minX >= height * 0.35, `seed ${seed}: crown must not collapse into a vertical tier`)
+  assert.ok(terminalWidth >= height * 0.25, `seed ${seed}: terminal structure must fill the crown horizontally`)
   assert.ok(stages.map((stage) => grownLength(stage) * stage.skeleton.growthScale)
     .every((size, index, sizes) => index === 0 || size > sizes[index - 1]), `seed ${seed}: lifecycle must grow monotonically`)
   assert.ok(stages.slice(0, 2).every((stage) => leafCount(stage) === 0), `seed ${seed}: early phases must stay leafless`)
@@ -319,6 +330,19 @@ for (const seed of [1, 2, 3, 4, 5]) {
   seedBlueprints.add(JSON.stringify(blueprint(plant)))
 }
 assert.equal(seedBlueprints.size, 5, 'different seeds must create unique trees')
+
+const screenshotConfig = { ...config, seed: 904200480, branching: 1, density: 1, curvature: 0.22, vitality: 0.91 }
+const screenshotPlant = generate(screenshotConfig)
+const screenshotHeight = screenshotPlant.bounds.maxY - screenshotPlant.bounds.minY
+const screenshotWidth = screenshotPlant.bounds.maxX - screenshotPlant.bounds.minX
+const screenshotTrunkHeight = Math.max(...screenshotPlant.skeleton.branches.filter((branch) => branch.level === 0).map((branch) => branch.y2))
+const lowerPrimary = groupBranches(screenshotPlant.skeleton.branches.filter((branch) => branch.level === 1))
+  .filter((segments) => segments[0].y1 < screenshotTrunkHeight * 0.4)
+const lowerPrimaryLength = Math.max(...lowerPrimary.map((segments) => segments.reduce((total, branch) =>
+  total + Math.hypot(branch.x2 - branch.x1, branch.y2 - branch.y1), 0)))
+assert.ok(screenshotWidth > screenshotHeight * 0.45, 'screenshot regression: mature crown must be broad rather than tiered')
+assert.ok(lowerPrimaryLength > screenshotTrunkHeight * 0.2, 'screenshot regression: lower primary subtrees must not collapse into a foliage ball')
+assert.ok(leafCount(screenshotPlant) <= screenshotPlant.crown.regions.length * 8, 'screenshot regression: foliage must not become particle noise')
 
 console.log('plant checks passed', {
   visibleByPhase: phaseEnds.map((plant) => visible(plant).length),

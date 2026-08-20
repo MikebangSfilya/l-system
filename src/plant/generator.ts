@@ -3,14 +3,14 @@ import type { BranchLevel, BranchSegment, PlantConfig, PlantCrown, PlantPhase, P
 
 const ITERATIONS = 6
 const MICRO_TWIGS = 5
-const REGION_PARTICLES = 28
+const REGION_PARTICLES = 8
 const AMBIENT_PARTICLES = 18
 
 const clamp = (value: number, min = 0, max = 1) => Number.isFinite(value) ? Math.min(max, Math.max(min, value)) : min
 const smoothstep = (value: number) => value * value * (3 - 2 * value)
 const levelOf = (depth: number) => Math.min(depth, 4) as BranchLevel
 const CURVATURE_BY_LEVEL = [0.12, 0.45, 0.8, 1.2, 1.5] as const
-const LENGTH_BY_LEVEL = [1.45, 1, 0.72, 0.58, 0.34] as const
+const LENGTH_BY_LEVEL = [1.2, 1, 0.72, 0.58, 0.34] as const
 const WIDTH_BY_LEVEL = [3, 1.55, 0.8, 0.4, 0.2] as const
 const TAPER_BY_LEVEL = [0.5, 0.5, 0.45, 0.4, 0.35] as const
 const WIDTH_GROWTH_BY_LEVEL = [0.7, 0.5, 0.3, 0.18, 0.08] as const
@@ -75,6 +75,7 @@ function branchTraits(seed: number, branchId: number, level: BranchLevel, curvat
     bendStrength: curvature * 0.32 * CURVATURE_BY_LEVEL[level] * (0.72 + next() * 0.28),
     angleVariation: (next() - 0.5) * (0.06 + curvature * 0.08),
     lengthScale: 0.92 + next() * 0.16,
+    tone: next(),
   }
 }
 
@@ -93,6 +94,7 @@ type Turtle = {
   bendDirection: -1 | 1
   angleVariation: number
   lengthScale: number
+  tone: number
   crownProgress: number
 }
 type RawSegment = Omit<BranchSegment, 'visibility'> & {
@@ -162,11 +164,7 @@ export function generateSkeleton(input: PlantConfig): PlantSkeleton {
       const verticalLength = turtle.depth === 1 || turtle.depth === 2
         ? 0.72 + Math.abs(Math.sin(turtle.angle)) * 0.28
         : 1
-      const crownScale = level === 0
-        ? 1
-        : level === 1
-          ? clamp((turtle.crownProgress - 0.22) * 2.7, 0.08, 1.45)
-          : 0.18 + 1.15 * smoothstep(turtle.crownProgress)
+      const crownScale = level === 0 ? 1 : 0.75 + 0.35 * smoothstep(turtle.crownProgress)
       const length = (0.94 + next() * 0.12) * LENGTH_BY_LEVEL[level] * crownScale * turtle.lengthScale * verticalLength
       const x = turtle.x + Math.cos(turtle.angle) * length
       const y = turtle.y + Math.sin(turtle.angle) * length
@@ -192,7 +190,7 @@ export function generateSkeleton(input: PlantConfig): PlantSkeleton {
         depthVisual: random(config.seed ^ Math.imul(id + 1, 0x7feb352d))(),
         densityThreshold: turtle.densityThreshold,
         width: WIDTH_BY_LEVEL[level] * (1 - TAPER_BY_LEVEL[level] * smoothstep(branchProgress)),
-        tone: next(),
+        tone: turtle.tone,
       })
       turtle.x = x
       turtle.y = y
@@ -355,8 +353,7 @@ export function generateCrown(skeleton: PlantSkeleton, input: PlantConfig): Plan
       const start = 0.04 + threshold * 0.58
       const enabled = threshold <= density ? anchor.visibility : 0
       const twigDepth = clamp(depthVisual + (next() - 0.5) * 0.3)
-      const width = (0.14 + next() * 0.05) * (0.85 + microProgress * 0.15)
-      const tone = next()
+      const width = (0.14 + next() * 0.05) * (0.94 + microProgress * 0.06)
       const id = skeleton.branches.length + microBranches.length
       microBranches.push(
         {
@@ -376,7 +373,7 @@ export function generateCrown(skeleton: PlantSkeleton, input: PlantConfig): Plan
           bendDirection: traits.bendDirection,
           depthVisual: twigDepth,
           visibility: enabled * clamp((microProgress - start) / 0.18),
-          tone,
+          tone: traits.tone,
         },
         {
           id: id + 1,
@@ -395,7 +392,7 @@ export function generateCrown(skeleton: PlantSkeleton, input: PlantConfig): Plan
           bendDirection: traits.bendDirection,
           depthVisual: twigDepth,
           visibility: enabled * clamp((microProgress - start - 0.12) / 0.2),
-          tone,
+          tone: traits.tone,
         },
       )
     }
