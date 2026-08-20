@@ -39,8 +39,8 @@ function makeWord(config: PlantConfig) {
   return system.iterate(ITERATIONS)
 }
 
-type Turtle = { x: number; y: number; angle: number; path: number; depth: number }
-type RawSegment = Omit<BranchSegment, 'visibility'> & { rank: number; depth: number }
+type Turtle = { x: number; y: number; angle: number; path: number; depth: number; age: number }
+type RawSegment = Omit<BranchSegment, 'visibility'> & { rank: number; depth: number; duration: number }
 type LeafCandidate = Leaf & { rank: number; depth: number }
 
 export function generatePlant(input: PlantConfig): PlantGeometry {
@@ -55,23 +55,26 @@ export function generatePlant(input: PlantConfig): PlantGeometry {
   const word = makeWord(config)
   const next = random(config.seed ^ 0x85ebca6b)
   const leafNext = random(config.seed ^ 0xc2b2ae35)
-  const turn = (18 + config.branching * 22) * (Math.PI / 180)
-  const turtle: Turtle = { x: 0, y: 0, angle: Math.PI / 2, path: 0, depth: 0 }
+  const turn = (20 + config.branching * 24) * (Math.PI / 180)
+  const turtle: Turtle = { x: 0, y: 0, angle: Math.PI / 2, path: 0, depth: 0, age: 0 }
   const stack: Turtle[] = []
   const raw: RawSegment[] = []
   const leafCandidates: LeafCandidate[] = []
-  let maxRank = 1
+  let maxRank = 0
 
   for (const symbol of word) {
     if (symbol === 'F') {
       turtle.angle += (next() - 0.5) * config.curvature * 0.16
       const depthLength = turtle.depth === 0
         ? 1.18
-        : (0.92 + config.branching * 0.22) * 0.93 ** (turtle.depth - 1)
+        : (1.15 + config.branching * 0.65) * 0.93 ** (turtle.depth - 1)
       const length = (1 + next() * 0.26) * depthLength
       const x = turtle.x + Math.cos(turtle.angle) * length
       const y = turtle.y + Math.sin(turtle.angle) * length
-      const rank = ++turtle.path + turtle.depth * 8
+      const duration = 0.0015 + turtle.depth ** 2 * 0.0065
+      turtle.age += duration
+      const rank = turtle.age
+      turtle.path += 1
       maxRank = Math.max(maxRank, rank)
       raw.push({
         x1: turtle.x,
@@ -80,6 +83,7 @@ export function generatePlant(input: PlantConfig): PlantGeometry {
         y2: y,
         rank,
         depth: turtle.depth,
+        duration,
         width: Math.max(0.16, 2.8 * Math.max(0.45, 1 - turtle.path * 0.004) * 0.58 ** turtle.depth),
         tone: next(),
       })
@@ -108,6 +112,7 @@ export function generatePlant(input: PlantConfig): PlantGeometry {
     } else if (symbol === '[') {
       stack.push({ ...turtle })
       turtle.depth += 1
+      turtle.age += 0.006 + turtle.depth * 0.004
     } else if (symbol === ']') {
       Object.assign(turtle, stack.pop()!)
     }
@@ -116,17 +121,17 @@ export function generatePlant(input: PlantConfig): PlantGeometry {
   const sizeGrowth = 0.45 + 0.55 * config.growth ** 0.65
   const widthGrowth = 0.45 + 0.55 * config.growth ** 0.7
   const progress = config.growth ** 1.35 * maxRank
-  const maxDepth = Math.min(ITERATIONS, 1 + Math.floor(config.growth * 5))
+  const maxDepth = Math.min(ITERATIONS, Math.floor(config.growth * 5))
   const branches = raw
     .filter((segment) => segment.depth <= maxDepth)
-    .map(({ rank, depth: _depth, ...segment }) => ({
+    .map(({ rank, depth: _depth, duration, ...segment }) => ({
       ...segment,
       x1: segment.x1 * sizeGrowth,
       y1: segment.y1 * sizeGrowth,
       x2: segment.x2 * sizeGrowth,
       y2: segment.y2 * sizeGrowth,
       width: segment.width * widthGrowth,
-      visibility: clamp(progress - rank + 1),
+      visibility: clamp((progress - rank + duration) / duration),
     }))
     .filter((segment) => segment.visibility > 0)
   const leaves = leafCandidates
