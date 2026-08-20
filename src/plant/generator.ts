@@ -110,6 +110,7 @@ type MatureBud = {
   outward: -1 | 0 | 1
   role: 'trunk' | 'edge' | 'branch'
   life: number
+  lengthScale: number
 }
 
 function crownShape(seed: number, height: number): CrownShape {
@@ -475,7 +476,7 @@ function matureGrowthRate(epoch: number) {
   return MATURE_GROWTH_FLOOR + (1 - MATURE_GROWTH_FLOOR) * Math.exp(-MATURE_GROWTH_DECAY * epoch)
 }
 
-function initialMatureFrontier(raw: RawSegment[]): MatureBud[] {
+function initialMatureFrontier(raw: RawSegment[], branching: number): MatureBud[] {
   const lastByBranch = new Map<number, RawSegment>()
   for (const segment of raw) {
     const previous = lastByBranch.get(segment.branchId)
@@ -506,7 +507,8 @@ function initialMatureFrontier(raw: RawSegment[]): MatureBud[] {
     densityThreshold: 0,
     outward,
     role,
-    life: -1,
+    life: role === 'trunk' ? -1 : 10 + Math.round(branching * 8),
+    lengthScale: 1,
   })
 
   const frontier = [make(trunk, 'trunk', 0)]
@@ -529,9 +531,9 @@ function extendMatureBud(
   )
   const targetAngle = bud.role === 'trunk'
     ? Math.PI / 2 + macroLean + Math.sin(epoch * 0.11 + config.seed) * config.curvature * 0.08
-    : bud.outward === 1
-      ? radians(bud.role === 'edge' ? 60 : 48 + next() * 24)
-      : radians(bud.role === 'edge' ? 120 : 108 + next() * 24)
+    : bud.role === 'edge'
+      ? radians(bud.outward === 1 ? 60 : 120)
+      : bud.baseDirection + angleDelta(bud.baseDirection, Math.PI / 2) * 0.22
   const bendVelocity = bud.bendVelocity * 0.72 + (next() * 2 - 1) * config.curvature * (
     bud.role === 'trunk' ? 0.018 : bud.role === 'edge' ? 0.055 : 0.095
   )
@@ -549,7 +551,7 @@ function extendMatureBud(
   }
 
   const baseLength = bud.role === 'trunk' ? 1.05 : bud.role === 'edge' ? 0.78 : 0.62
-  const length = baseLength * growth * (0.88 + next() * 0.24)
+  const length = baseLength * growth * bud.lengthScale * (0.88 + next() * 0.24)
   const nextX = bud.x + Math.cos(angle) * length
   const nextY = bud.y + Math.sin(angle) * length
   const id = raw.length
@@ -589,7 +591,7 @@ function extendMatureBud(
 function appendMatureGrowth(raw: RawSegment[], config: PlantConfig, matureAge: number) {
   if (matureAge <= 0) return
 
-  let frontier = initialMatureFrontier(raw)
+  let frontier = initialMatureFrontier(raw, config.branching)
   let nextBranchId = Math.max(...raw.map((segment) => segment.branchId)) + 1
   const epochCount = Math.ceil(matureAge)
   const macroLean = (random(config.seed ^ 0x3bd39e10)() - 0.5) * radians(10)
@@ -609,7 +611,7 @@ function appendMatureGrowth(raw: RawSegment[], config: PlantConfig, matureAge: n
       if (grown.life !== 0) continued.push(grown)
 
       const spawnChance = bud.role === 'trunk'
-        ? 0.04 + config.branching * 0.28
+        ? (0.04 + config.branching * 0.28) * growth
         : bud.role === 'edge' ? config.branching * 0.08 : config.branching * 0.055
       const spawnNext = random(
         config.seed ^ 0x67e8a953 ^ Math.imul(epoch + 1, 0x165667b1) ^ Math.imul(bud.branchId + 1, 0x27d4eb2d),
@@ -622,11 +624,18 @@ function appendMatureGrowth(raw: RawSegment[], config: PlantConfig, matureAge: n
       ) {
         const outward = (spawnNext() < 0.5 ? -1 : 1) as -1 | 1
         const depth = bud.role === 'trunk' ? 1 : Math.min(4, bud.depth + 1)
-        const childAngle = outward === 1
-          ? radians(35 + spawnNext() * 30)
-          : Math.PI - radians(35 + spawnNext() * 30)
+        const spread = radians(18 + spawnNext() * 58)
+        const childAngle = outward === 1 ? spread : Math.PI - spread
         const branchId = nextBranchId++
         const childNext = random(config.seed ^ 0x7f4a7c15 ^ Math.imul(branchId + 1, 0x27d4eb2d))
+        const life = depth === 1
+          ? 16 + Math.floor(childNext() * 7 + config.branching * 6)
+          : 4 + Math.floor(childNext() * 4 + config.branching * 3)
+        const reachVariation = 0.62 + childNext() * 0.76
+        const lengthScale = depth === 1
+          ? Math.max(1, grown.y * (0.44 + config.branching * 0.38) * reachVariation
+            * (0.72 + Math.sin(childAngle) * 0.28) / (life * 0.62 * growth))
+          : bud.lengthScale * (0.38 + childNext() * 0.18)
         const child = {
           x: grown.x,
           y: grown.y,
@@ -643,7 +652,8 @@ function appendMatureGrowth(raw: RawSegment[], config: PlantConfig, matureAge: n
           densityThreshold: depth >= 3 ? childNext() : 0,
           outward,
           role: 'branch',
-          life: 4 + Math.floor(childNext() * 4 + config.branching * 3),
+          life,
+          lengthScale,
         } satisfies MatureBud
         const childProgress = Math.min(0.68, 0.42 + spawned.length * 0.04)
         const grownChild = extendMatureBud(raw, config, child, epoch, growth, macroLean, childProgress)
@@ -770,8 +780,15 @@ export function generateCrown(skeleton: PlantSkeleton, input: PlantConfig): Plan
       ? anchor.depth === 0 || anchor.depth === 2 || (anchor.terminal && anchor.depth >= 2)
       : anchor.terminal && anchor.depth >= 1)
     .sort((left, right) => Number(right.terminal) - Number(left.terminal) || left.id - right.id)
-  const crownAnchors = candidateAnchors.reduce<typeof candidateAnchors>((selected, anchor) => {
-    const minimumDistance = baseTreeHeight * 0.035
+  const crownCandidateCount = Math.min(candidateAnchors.length, MAX_CROWN_REGIONS)
+  const crownCandidates = Array.from(
+    { length: crownCandidateCount },
+    (_, index) => candidateAnchors[Math.floor(index * candidateAnchors.length / crownCandidateCount)],
+  )
+  const crownAnchors = crownCandidates.reduce<typeof candidateAnchors>((selected, anchor) => {
+    const minimumDistance = anchor.birthEpoch < 0
+      ? baseTreeHeight * 0.035
+      : Math.max(baseTreeHeight, anchor.y) * 0.025
     if (selected.length < MAX_CROWN_REGIONS && selected.every((other) => Math.hypot(anchor.x - other.x, anchor.y - other.y) >= minimumDistance)) {
       selected.push(anchor)
     }
@@ -787,7 +804,8 @@ export function generateCrown(skeleton: PlantSkeleton, input: PlantConfig): Plan
     const regionKey = branchById.get(anchor.id)?.branchId ?? anchor.id
     const next = random(config.seed ^ 0xc2b2ae35 ^ Math.imul(regionKey + 1, 0x27d4eb2d))
     const heightScale = 0.88 + smoothstep(clamp(anchor.y / baseTreeHeight)) * 0.25
-    const radiusX = baseTreeHeight * (0.055 + next() * 0.038) * heightScale
+    const regionScale = anchor.birthEpoch < 0 ? baseTreeHeight : Math.max(baseTreeHeight, anchor.y)
+    const radiusX = regionScale * (anchor.birthEpoch < 0 ? 0.055 + next() * 0.038 : 0.026 + next() * 0.022) * heightScale
     const radiusY = radiusX * (0.58 + next() * 0.18)
     const depthVisual = clamp(anchor.depthVisual * 0.65 + next() * 0.35)
     const leaves = Array.from({ length: REGION_PARTICLES }, () => {

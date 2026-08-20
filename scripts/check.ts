@@ -173,6 +173,23 @@ assert.deepEqual(
   'density and vitality must not reshape mature geometry',
 )
 
+const veryOld = generate({
+  ...config,
+  ageEpoch: 1500,
+  phaseProgress: 1,
+  branching: 0.48,
+  density: 0.71,
+  curvature: 0.22,
+  vitality: 0.91,
+  seed: 3698315778,
+})
+const veryOldAxes = groupBranches(veryOld.skeleton.branches).filter((segments) => segments[0].branchId !== 0)
+assert.ok(Math.max(...veryOldAxes.map((segments) => segments.length)) < 64, 'side leaders must expire instead of becoming infinite rays')
+assert.ok(
+  (veryOld.bounds.maxX - veryOld.bounds.minX) / (veryOld.bounds.maxY - veryOld.bounds.minY) > 0.35,
+  'very old trees must retain a readable crown instead of collapsing into a needle',
+)
+
 const [seedling, structure, canopy, adult] = phasePlants.map((plants) => plants.at(-1)!)
 assert.ok(visible(seedling).every((branch) => branch.depth === 0), 'seedling must remain trunk-only')
 assert.equal(Math.max(...visible(structure).map((branch) => branch.depth)), 1, 'structure phase must contain only macro axes')
