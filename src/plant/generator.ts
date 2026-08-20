@@ -198,13 +198,13 @@ export function generateFoliage(skeleton: PlantSkeleton, input: PlantConfig): Fo
     if (next() >= chance) continue
 
     const count = 3 + Math.floor(next() * 2 + density * 2 + vitality * 2 + maturity * 2)
-    const radius = (0.38 + density * 0.72) * (0.7 + maturity * 0.3)
+    const radius = (0.9 + density * 2.1) * (0.75 + maturity * 0.25)
     const leaves = Array.from({ length: count }, () => {
       const direction = next() * Math.PI * 2
       const distance = Math.sqrt(next()) * radius
       return {
         x: Math.cos(direction) * distance,
-        y: Math.sin(direction) * distance * 0.7,
+        y: Math.sin(direction) * distance,
         angle: anchor.angle + (next() - 0.5) * 1.8,
         size: (0.5 + next() * 0.35) * (0.78 + vitality * 0.22) * (0.78 + maturity * 0.22),
         vitality,
