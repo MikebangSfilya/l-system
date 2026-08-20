@@ -94,8 +94,15 @@ assert.ok(screenBounds.minY >= padding - 1e-9 && screenBounds.maxY <= 640 - padd
 for (const seed of [1, 2, 3, 12345, 1672279225]) {
   const tree = generateSkeleton({ ...config, growth: 1, seed })
   const bounds = computeBounds(tree.branches)
+  const height = bounds.maxY - bounds.minY
+  const points = tree.branches.flatMap((branch) => [[branch.x1, branch.y1], [branch.x2, branch.y2]])
+  const span = (xs: number[]) => Math.max(...xs) - Math.min(...xs)
+  const upperWidth = span(points.filter(([, y]) => y >= bounds.minY + height * 0.6).map(([x]) => x))
+  const lowerWidth = span(points.filter(([, y]) => y < bounds.minY + height * 0.6).map(([x]) => x))
   assert.ok(tree.branches.filter((branch) => branch.depth <= 2).every((branch) => branch.y2 >= branch.y1), `seed ${seed}: major branches must grow upward`)
-  assert.ok(bounds.maxX - bounds.minX <= (bounds.maxY - bounds.minY) * 1.25, `seed ${seed}: mature silhouette must not be wider than tall`)
+  assert.ok(bounds.maxX - bounds.minX >= height * 0.22, `seed ${seed}: mature branches must not clump around the trunk`)
+  assert.ok(bounds.maxX - bounds.minX <= height * 1.25, `seed ${seed}: mature silhouette must not be wider than tall`)
+  assert.ok(upperWidth > lowerWidth, `seed ${seed}: crown must widen toward the top`)
 }
 
 console.log('plant checks passed', { stages, heights: heights.map((height) => height.toFixed(1)) })

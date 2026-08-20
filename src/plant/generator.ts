@@ -58,7 +58,7 @@ type RawSegment = Omit<BranchSegment, 'visibility'> & {
 const verticalDifference = (angle: number) => Math.atan2(Math.sin(angle - Math.PI / 2), Math.cos(angle - Math.PI / 2))
 
 function shapeAngle(angle: number, depth: number) {
-  const attraction = [0.18, 0.11, 0.06][depth] ?? 0.025
+  const attraction = [0.03, 0.008, 0.004][depth] ?? 0.001
   const limit = ([12, 58, 68][depth] ?? 82) * Math.PI / 180
   return Math.PI / 2 + clamp(verticalDifference(angle) * (1 - attraction), -limit, limit)
 }
@@ -75,7 +75,7 @@ export function generateSkeleton(input: PlantConfig): PlantSkeleton {
   const word = makeWord(config)
   const next = random(config.seed ^ 0x85ebca6b)
   const lean = (random(config.seed ^ 0x27d4eb2f)() - 0.5) * 10 * Math.PI / 180
-  const turn = (20 + config.branching * 24) * (Math.PI / 180)
+  const turn = (28 + config.branching * 28) * (Math.PI / 180)
   const turtle: Turtle = {
     x: 0,
     y: 0,
@@ -98,7 +98,7 @@ export function generateSkeleton(input: PlantConfig): PlantSkeleton {
       )
       const depthLength = turtle.depth === 0
         ? 1.18
-        : (1.05 + config.branching * 0.45) * 0.78 ** (turtle.depth - 1)
+        : (1.6 + config.branching * 0.65) * 0.78 ** (turtle.depth - 1)
       const verticalLength = turtle.depth === 1 || turtle.depth === 2
         ? 0.72 + Math.abs(Math.sin(turtle.angle)) * 0.28
         : 1
