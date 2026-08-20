@@ -52,8 +52,15 @@ type RawSegment = Omit<BranchSegment, 'visibility'> & {
   id: number
   parent: number | null
   rank: number
-  depth: number
   duration: number
+}
+
+const verticalDifference = (angle: number) => Math.atan2(Math.sin(angle - Math.PI / 2), Math.cos(angle - Math.PI / 2))
+
+function shapeAngle(angle: number, depth: number) {
+  const attraction = [0.18, 0.11, 0.06][depth] ?? 0.025
+  const limit = ([12, 58, 68][depth] ?? 82) * Math.PI / 180
+  return Math.PI / 2 + clamp(verticalDifference(angle) * (1 - attraction), -limit, limit)
 }
 
 export function generateSkeleton(input: PlantConfig): PlantSkeleton {
@@ -67,11 +74,12 @@ export function generateSkeleton(input: PlantConfig): PlantSkeleton {
   }
   const word = makeWord(config)
   const next = random(config.seed ^ 0x85ebca6b)
+  const lean = (random(config.seed ^ 0x27d4eb2f)() - 0.5) * 10 * Math.PI / 180
   const turn = (20 + config.branching * 24) * (Math.PI / 180)
   const turtle: Turtle = {
     x: 0,
     y: 0,
-    angle: Math.PI / 2,
+    angle: Math.PI / 2 + lean,
     path: 0,
     depth: 0,
     age: 0,
@@ -83,11 +91,18 @@ export function generateSkeleton(input: PlantConfig): PlantSkeleton {
 
   for (const symbol of word) {
     if (symbol === 'F') {
-      turtle.angle += (next() - 0.5) * config.curvature * 0.16
+      const curvatureScale = [0.28, 0.45, 0.65][turtle.depth] ?? 1
+      turtle.angle = shapeAngle(
+        turtle.angle + (next() - 0.5) * config.curvature * 0.16 * curvatureScale,
+        turtle.depth,
+      )
       const depthLength = turtle.depth === 0
         ? 1.18
         : (1.05 + config.branching * 0.45) * 0.78 ** (turtle.depth - 1)
-      const length = (1 + next() * 0.26) * depthLength
+      const verticalLength = turtle.depth === 1 || turtle.depth === 2
+        ? 0.72 + Math.abs(Math.sin(turtle.angle)) * 0.28
+        : 1
+      const length = (1 + next() * 0.26) * depthLength * verticalLength
       const x = turtle.x + Math.cos(turtle.angle) * length
       const y = turtle.y + Math.sin(turtle.angle) * length
       const duration = 0.0015 + turtle.depth ** 2 * 0.0065
@@ -125,22 +140,16 @@ export function generateSkeleton(input: PlantConfig): PlantSkeleton {
     }
   }
 
-  const sizeGrowth = 0.45 + 0.55 * config.growth ** 0.65
-  const widthGrowth = 0.45 + 0.55 * config.growth ** 0.7
+  const growthScale = 0.45 + 0.55 * config.growth ** 0.65
   const progress = config.growth ** 1.35 * maxRank
   const maxDepth = Math.min(ITERATIONS, Math.floor(config.growth * 5))
-  const visible = raw
-    .filter((segment) => segment.depth <= maxDepth)
-    .map((segment) => ({
-      ...segment,
-      x1: segment.x1 * sizeGrowth,
-      y1: segment.y1 * sizeGrowth,
-      x2: segment.x2 * sizeGrowth,
-      y2: segment.y2 * sizeGrowth,
-      width: segment.width * widthGrowth,
-      visibility: clamp((progress - segment.rank + segment.duration) / segment.duration),
-    }))
-    .filter((segment) => segment.visibility > 0)
+  const branchesWithIds = raw.map((segment) => ({
+    ...segment,
+    visibility: segment.depth <= maxDepth
+      ? clamp((progress - segment.rank + segment.duration) / segment.duration)
+      : 0,
+  }))
+  const visible = branchesWithIds.filter((segment) => segment.visibility > 0)
   const parentsWithVisibleChildren = new Set(visible.flatMap((segment) =>
     segment.parent === null ? [] : [segment.parent]
   ))
@@ -168,19 +177,9 @@ export function generateSkeleton(input: PlantConfig): PlantSkeleton {
         terminal,
       }
     })
-  const branches = visible.map(({ id: _id, parent: _parent, rank: _rank, depth: _depth, duration: _duration, ...segment }) => segment)
+  const branches = branchesWithIds.map(({ id: _id, parent: _parent, rank: _rank, duration: _duration, ...segment }) => segment)
 
-  const bounds = raw.reduce(
-    (box, branch) => ({
-      minX: Math.min(box.minX, branch.x1, branch.x2),
-      minY: Math.min(box.minY, branch.y1, branch.y2),
-      maxX: Math.max(box.maxX, branch.x1, branch.x2),
-      maxY: Math.max(box.maxY, branch.y1, branch.y2),
-    }),
-    { minX: 0, minY: 0, maxX: 0, maxY: 1 },
-  )
-
-  return { branches, foliageAnchors, bounds }
+  return { root: { x: 0, y: 0 }, branches, foliageAnchors, growthScale }
 }
 
 export function generateFoliage(skeleton: PlantSkeleton, input: PlantConfig): FoliageCluster[] {

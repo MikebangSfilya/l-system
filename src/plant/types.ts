@@ -13,6 +13,7 @@ export type BranchSegment = {
   x2: number
   y2: number
   width: number
+  depth: number
   visibility: number
   tone: number
 }
@@ -40,7 +41,16 @@ export type FoliageCluster = {
 }
 
 export type PlantSkeleton = {
+  root: { x: number; y: number }
   branches: BranchSegment[]
   foliageAnchors: FoliageAnchor[]
-  bounds: { minX: number; minY: number; maxX: number; maxY: number }
+  growthScale: number
+}
+
+export type Bounds = { minX: number; minY: number; maxX: number; maxY: number }
+
+export type ViewTransform = {
+  rootX: number
+  rootY: number
+  scale: number
 }

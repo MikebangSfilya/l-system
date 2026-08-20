@@ -1,6 +1,11 @@
-import type { FoliageCluster, PlantSkeleton } from './types.ts'
+import type { FoliageCluster, PlantSkeleton, ViewTransform } from './types.ts'
 
-export function renderPlant(ctx: CanvasRenderingContext2D, plant: PlantSkeleton, foliage: FoliageCluster[]) {
+export function renderPlant(
+  ctx: CanvasRenderingContext2D,
+  plant: PlantSkeleton,
+  foliage: FoliageCluster[],
+  transform: ViewTransform,
+) {
   const { width, height } = ctx.canvas
   ctx.clearRect(0, 0, width, height)
   const background = ctx.createRadialGradient(width * 0.52, height * 0.42, 0, width * 0.5, height * 0.5, width * 0.75)
@@ -16,18 +21,15 @@ export function renderPlant(ctx: CanvasRenderingContext2D, plant: PlantSkeleton,
   ctx.fillStyle = ground
   ctx.fillRect(0, height * 0.82, width, height * 0.18)
 
-  const plantWidth = Math.max(1, plant.bounds.maxX - plant.bounds.minX)
-  const plantHeight = Math.max(1, plant.bounds.maxY - plant.bounds.minY)
-  const scale = Math.min((width - 52) / plantWidth, (height - 50) / plantHeight)
-  const centerX = (plant.bounds.minX + plant.bounds.maxX) / 2
-
   ctx.save()
-  ctx.translate(width / 2 - centerX * scale, height - 22)
-  ctx.scale(scale, -scale)
+  ctx.translate(transform.rootX, transform.rootY)
+  ctx.scale(transform.scale * plant.growthScale, -transform.scale * plant.growthScale)
+  ctx.translate(-plant.root.x, -plant.root.y)
   ctx.lineCap = 'round'
   ctx.globalCompositeOperation = 'lighter'
 
   for (const branch of plant.branches) {
+    if (branch.visibility <= 0) continue
     ctx.beginPath()
     ctx.moveTo(branch.x1, branch.y1)
     ctx.lineTo(
