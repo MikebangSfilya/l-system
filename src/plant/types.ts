@@ -25,8 +25,22 @@ export type Leaf = {
   vitality: number
 }
 
-export type PlantGeometry = {
-  branches: BranchSegment[]
+export type FoliageAnchor = {
+  id: number
+  x: number
+  y: number
+  angle: number
+  terminal: boolean
+}
+
+export type FoliageCluster = {
+  x: number
+  y: number
   leaves: Leaf[]
+}
+
+export type PlantSkeleton = {
+  branches: BranchSegment[]
+  foliageAnchors: FoliageAnchor[]
   bounds: { minX: number; minY: number; maxX: number; maxY: number }
 }

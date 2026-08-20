@@ -1,6 +1,6 @@
-import type { PlantGeometry } from './types.ts'
+import type { FoliageCluster, PlantSkeleton } from './types.ts'
 
-export function renderPlant(ctx: CanvasRenderingContext2D, plant: PlantGeometry) {
+export function renderPlant(ctx: CanvasRenderingContext2D, plant: PlantSkeleton, foliage: FoliageCluster[]) {
   const { width, height } = ctx.canvas
   ctx.clearRect(0, 0, width, height)
   ctx.fillStyle = '#f4f1e8'
@@ -28,15 +28,17 @@ export function renderPlant(ctx: CanvasRenderingContext2D, plant: PlantGeometry)
     ctx.stroke()
   }
 
-  for (const leaf of plant.leaves) {
-    ctx.save()
-    ctx.translate(leaf.x, leaf.y)
-    ctx.rotate(leaf.angle)
-    ctx.beginPath()
-    ctx.ellipse(0, 0, leaf.size, leaf.size * 0.42, 0, 0, Math.PI * 2)
-    ctx.fillStyle = `hsl(${58 + leaf.vitality * 55} ${35 + leaf.vitality * 30}% ${32 + leaf.vitality * 10}%)`
-    ctx.fill()
-    ctx.restore()
+  for (const cluster of foliage) {
+    for (const leaf of cluster.leaves) {
+      ctx.save()
+      ctx.translate(cluster.x + leaf.x, cluster.y + leaf.y)
+      ctx.rotate(leaf.angle)
+      ctx.beginPath()
+      ctx.ellipse(0, 0, leaf.size, leaf.size * 0.55, 0, 0, Math.PI * 2)
+      ctx.fillStyle = `hsl(${58 + leaf.vitality * 55} ${35 + leaf.vitality * 30}% ${32 + leaf.vitality * 10}%)`
+      ctx.fill()
+      ctx.restore()
+    }
   }
 
   ctx.restore()
