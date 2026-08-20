@@ -140,7 +140,7 @@ assert.ok(averageWidth(adult, 1) > averageWidth(phasePlants[3][0], 1) * 1.15, 'm
 const narrow = generate({ ...config, branching: 0 })
 const branched = generate({ ...config, branching: 1 })
 assert.ok(
-  visible(branched).length > visible(narrow).length && visibleWidth(branched) > visibleWidth(narrow) * 2,
+  visible(branched).length > visible(narrow).length * 3 && visibleWidth(branched) > visibleWidth(narrow) * 1.35,
   'branching must shape the macro structure',
 )
 const earlySparse = generate({ ...config, phase: 1, phaseProgress: 1, density: 0 })
@@ -173,7 +173,7 @@ assert.ok(leafCount(densityPlants.at(-1)!) > leafCount(densityPlants[1]) * 5, 'd
 
 const locallyDense = generate({ ...config, branching: 0.2, density: 1 })
 const structurallyComplex = generate({ ...config, branching: 1, density: 0.2 })
-assert.ok(visible(structurallyComplex).length > visible(locallyDense).length * 3, 'branching must control structural complexity')
+assert.ok(visible(structurallyComplex).length > visible(locallyDense).length * 2.5, 'branching must control structural complexity')
 assert.ok(
   leafCount(locallyDense) / activeRegions(locallyDense).length > leafCount(structurallyComplex) / activeRegions(structurallyComplex).length * 3,
   'density must control local crown fill independently of branching',
@@ -247,8 +247,11 @@ assert.ok(leafCount(highVitality) > leafCount(lowVitality), 'vitality must affec
 assert.ok(highVitality.crown.ambientParticles.length > lowVitality.crown.ambientParticles.length, 'vitality must affect crown particles')
 
 const terminalIds = new Set(mature.skeleton.foliageAnchors.filter((anchor) => anchor.terminal).map((anchor) => anchor.id))
-assert.equal(mature.crown.regions.length, terminalIds.size, 'each terminal point must define one crown region')
-assert.ok(mature.crown.regions.every((region) => terminalIds.has(region.anchorId)), 'crown regions must stay attached to terminal points')
+const anchorIds = new Set(mature.skeleton.foliageAnchors.map((anchor) => anchor.id))
+const regionIds = new Set(mature.crown.regions.map((region) => region.anchorId))
+assert.ok(mature.crown.regions.every((region) => anchorIds.has(region.anchorId)), 'crown regions must stay attached to structural anchors')
+assert.ok(mature.skeleton.foliageAnchors.filter((anchor) => anchor.depth <= 2).every((anchor) => regionIds.has(anchor.id)), 'primary and secondary axes must seed crown volume')
+assert.ok(mature.crown.regions.some((region) => !terminalIds.has(region.anchorId)), 'crown volume must not depend only on terminal points')
 assert.ok(mature.crown.regions.every((region) => region.leaves.every((leaf) =>
   (leaf.x / region.radiusX) ** 2 + (leaf.y / region.radiusY) ** 2 <= 1 + Number.EPSILON
 )), 'structural particles must remain inside their crown region')
@@ -295,6 +298,9 @@ for (const seed of [1, 2, 3, 4, 5]) {
       angleDelta(direction(segments[index]), direction(branch)) * branch.bendDirection >= -1e-10
     ), `seed ${seed}: trunk must bend smoothly without reversals`)
   }
+  assert.ok(groupBranches(plant.skeleton.branches).every((segments) =>
+    segments.every((branch) => branch.depthVisual === segments[0].depthVisual)
+  ), `seed ${seed}: visual depth must stay stable along a branch`)
   assert.ok(plant.skeleton.branches.filter((branch) => branch.depth <= 2).every((branch) => branch.y2 >= branch.y1), `seed ${seed}: major branches must grow upward`)
   assert.ok(bounds.maxX - bounds.minX <= height * 1.25, `seed ${seed}: silhouette must remain composed`)
   assert.ok(bounds.maxX - bounds.minX >= height * 0.35, `seed ${seed}: crown must not collapse into a vertical tier`)
@@ -342,7 +348,24 @@ const lowerPrimaryLength = Math.max(...lowerPrimary.map((segments) => segments.r
   total + Math.hypot(branch.x2 - branch.x1, branch.y2 - branch.y1), 0)))
 assert.ok(screenshotWidth > screenshotHeight * 0.45, 'screenshot regression: mature crown must be broad rather than tiered')
 assert.ok(lowerPrimaryLength > screenshotTrunkHeight * 0.2, 'screenshot regression: lower primary subtrees must not collapse into a foliage ball')
-assert.ok(leafCount(screenshotPlant) <= screenshotPlant.crown.regions.length * 8, 'screenshot regression: foliage must not become particle noise')
+assert.ok(leafCount(screenshotPlant) <= screenshotPlant.crown.regions.length * 14, 'screenshot regression: foliage must remain bounded')
+assert.ok(leafCount(screenshotPlant) >= screenshotPlant.crown.regions.length * 9, 'screenshot regression: foliage must form visible mass')
+
+const balancedConfig = { ...config, branching: 0.48, density: 0.71, curvature: 0.22, vitality: 0.91 }
+for (const seed of [1, 2, 3, 4, 5, 1658534288, 904200480]) {
+  const plant = generate({ ...balancedConfig, seed })
+  const height = plant.bounds.maxY - plant.bounds.minY
+  const width = plant.bounds.maxX - plant.bounds.minX
+  const primary = groupBranches(plant.skeleton.branches.filter((branch) => branch.level === 1))
+  const primaryLengths = primary.map((segments) => segments.reduce((total, branch) =>
+    total + Math.hypot(branch.x2 - branch.x1, branch.y2 - branch.y1), 0))
+  const tiers = new Set(primary.map((segments) => segments[0].y1.toFixed(4)))
+  const regions = activeRegions(plant)
+  assert.ok(primary.length >= 5 && tiers.size >= 5, `seed ${seed}: leader must distribute primary branches through the crown`)
+  assert.ok(Math.max(...primaryLengths) < Math.min(...primaryLengths) * 1.7, `seed ${seed}: L-system segment count must not dictate branch length`)
+  assert.ok(width >= height * 0.42, `seed ${seed}: medium branching must still produce a broad crown`)
+  assert.ok(regions.length >= 30 && leafCount(plant) >= regions.length * 6, `seed ${seed}: mature crown must contain visible foliage mass`)
+}
 
 console.log('plant checks passed', {
   visibleByPhase: phaseEnds.map((plant) => visible(plant).length),

@@ -3,7 +3,7 @@ import type { BranchLevel, BranchSegment, PlantConfig, PlantCrown, PlantPhase, P
 
 const ITERATIONS = 6
 const MICRO_TWIGS = 5
-const REGION_PARTICLES = 8
+const REGION_PARTICLES = 14
 const AMBIENT_PARTICLES = 18
 
 const clamp = (value: number, min = 0, max = 1) => Number.isFinite(value) ? Math.min(max, Math.max(min, value)) : min
@@ -11,6 +11,8 @@ const smoothstep = (value: number) => value * value * (3 - 2 * value)
 const levelOf = (depth: number) => Math.min(depth, 4) as BranchLevel
 const CURVATURE_BY_LEVEL = [0.12, 0.45, 0.8, 1.2, 1.5] as const
 const LENGTH_BY_LEVEL = [1.2, 1, 0.72, 0.58, 0.34] as const
+const LENGTH_REFERENCE_BY_LEVEL = [1, 52, 18, 8, 4] as const
+const MAX_SEGMENT_LENGTH_BY_LEVEL = [1.4, 1.05, 0.72, 0.52, 0.34] as const
 const WIDTH_BY_LEVEL = [3, 1.55, 0.8, 0.4, 0.2] as const
 const TAPER_BY_LEVEL = [0.5, 0.5, 0.45, 0.4, 0.35] as const
 const WIDTH_GROWTH_BY_LEVEL = [0.7, 0.5, 0.3, 0.18, 0.08] as const
@@ -29,17 +31,25 @@ function random(seed: number) {
 function makeWord(config: PlantConfig) {
   const next = random(config.seed ^ 0x9e3779b9)
   const branching = clamp(config.branching)
-  const branchChance = 0.06 + branching * 0.88
+  const branchChance = 0.04 + branching * 0.82
   const twigChance = branching * 0.16
+  let leaderStep = 0
 
   const system = new LSystem({
     axiom: 'X',
     productions: {
       F: 'FF',
-      X: () => {
+      X: ({ index, currentAxiom }) => {
         let result = 'F'
-        if (next() < branchChance) result += '[+X]'
-        if (next() < branchChance) result += '[-X]'
+        if (index === currentAxiom.length - 1) {
+          const side = leaderStep % 2 === 0 ? '+' : '-'
+          result += `[${side}X]`
+          if (next() < branching) result += `[${side === '+' ? '-' : '+'}X]`
+          leaderStep += 1
+        } else {
+          if (next() < branchChance) result += '[+X]'
+          if (next() < branchChance) result += '[-X]'
+        }
         if (next() < twigChance) result += next() < 0.5 ? '[++X]' : '[--X]'
         return `${result}FX`
       },
@@ -76,6 +86,7 @@ function branchTraits(seed: number, branchId: number, level: BranchLevel, curvat
     angleVariation: (next() - 0.5) * (0.06 + curvature * 0.08),
     lengthScale: 0.92 + next() * 0.16,
     tone: next(),
+    depthVisual: next(),
   }
 }
 
@@ -95,6 +106,7 @@ type Turtle = {
   angleVariation: number
   lengthScale: number
   tone: number
+  depthVisual: number
   crownProgress: number
 }
 type RawSegment = Omit<BranchSegment, 'visibility'> & {
@@ -133,7 +145,7 @@ export function generateSkeleton(input: PlantConfig): PlantSkeleton {
   const next = random(config.seed ^ 0x85ebca6b)
   const detailNext = random(config.seed ^ 0x165667b1)
   const lean = (random(config.seed ^ 0x27d4eb2f)() - 0.5) * 10 * Math.PI / 180
-  const turn = (28 + config.branching * 28) * (Math.PI / 180)
+  const turn = (36 + config.branching * 22) * (Math.PI / 180)
   const trunkTraits = branchTraits(config.seed, 0, 0, config.curvature)
   const turtle: Turtle = {
     x: 0,
@@ -156,51 +168,58 @@ export function generateSkeleton(input: PlantConfig): PlantSkeleton {
   for (const symbol of word) {
     if (symbol === 'F') {
       const level = levelOf(turtle.depth)
-      const branchProgress = (turtle.branchStep + 1) / branchLengths[turtle.branchId]
-      turtle.angle = shapeAngle(
-        turtle.baseDirection + turtle.bendDirection * turtle.bendStrength * smoothstep(branchProgress),
-        turtle.depth,
-      )
-      const verticalLength = turtle.depth === 1 || turtle.depth === 2
-        ? 0.72 + Math.abs(Math.sin(turtle.angle)) * 0.28
-        : 1
-      const crownScale = level === 0 ? 1 : 0.75 + 0.35 * smoothstep(turtle.crownProgress)
-      const length = (0.94 + next() * 0.12) * LENGTH_BY_LEVEL[level] * crownScale * turtle.lengthScale * verticalLength
-      const x = turtle.x + Math.cos(turtle.angle) * length
-      const y = turtle.y + Math.sin(turtle.angle) * length
-      const duration = 0.0015 + turtle.depth ** 2 * 0.0065
-      turtle.age += duration
-      const rank = turtle.age
-      const id = raw.length
-      raw.push({
-        id,
-        parentId: turtle.parentId,
-        branchId: turtle.branchId,
-        branchProgress,
-        x1: turtle.x,
-        y1: turtle.y,
-        x2: x,
-        y2: y,
-        rank,
-        depth: turtle.depth,
-        level,
-        baseDirection: turtle.baseDirection,
-        bendStrength: turtle.bendStrength,
-        bendDirection: turtle.bendDirection,
-        depthVisual: random(config.seed ^ Math.imul(id + 1, 0x7feb352d))(),
-        densityThreshold: turtle.densityThreshold,
-        width: WIDTH_BY_LEVEL[level] * (1 - TAPER_BY_LEVEL[level] * smoothstep(branchProgress)),
-        tone: turtle.tone,
-      })
-      turtle.x = x
-      turtle.y = y
-      turtle.parentId = id
+      const crownScale = level === 0 ? 1 : 0.72 + 0.5 * smoothstep(turtle.crownProgress)
+      const segmentScale = level === 0
+        ? 1
+        : (LENGTH_REFERENCE_BY_LEVEL[level] / branchLengths[turtle.branchId]) ** 0.85
+      const rawLength = (0.94 + next() * 0.12) * LENGTH_BY_LEVEL[level] * segmentScale * crownScale * turtle.lengthScale
+      const pieces = Math.max(1, Math.ceil(rawLength / MAX_SEGMENT_LENGTH_BY_LEVEL[level]))
+      const duration = (0.0015 + turtle.depth ** 2 * 0.0065) / pieces
+
+      for (let piece = 0; piece < pieces; piece += 1) {
+        const branchProgress = (turtle.branchStep + (piece + 1) / pieces) / branchLengths[turtle.branchId]
+        turtle.angle = shapeAngle(
+          turtle.baseDirection + turtle.bendDirection * turtle.bendStrength * smoothstep(branchProgress),
+          turtle.depth,
+        )
+        const verticalLength = turtle.depth === 1 || turtle.depth === 2
+          ? 0.72 + Math.abs(Math.sin(turtle.angle)) * 0.28
+          : 1
+        const length = rawLength / pieces * verticalLength
+        const x = turtle.x + Math.cos(turtle.angle) * length
+        const y = turtle.y + Math.sin(turtle.angle) * length
+        turtle.age += duration
+        const id = raw.length
+        raw.push({
+          id,
+          parentId: turtle.parentId,
+          branchId: turtle.branchId,
+          branchProgress,
+          x1: turtle.x,
+          y1: turtle.y,
+          x2: x,
+          y2: y,
+          rank: turtle.age,
+          depth: turtle.depth,
+          level,
+          baseDirection: turtle.baseDirection,
+          bendStrength: turtle.bendStrength,
+          bendDirection: turtle.bendDirection,
+          depthVisual: turtle.depthVisual,
+          densityThreshold: turtle.densityThreshold,
+          width: WIDTH_BY_LEVEL[level] * (1 - TAPER_BY_LEVEL[level] * smoothstep(branchProgress)),
+          tone: turtle.tone,
+        })
+        turtle.x = x
+        turtle.y = y
+        turtle.parentId = id
+      }
       turtle.branchStep += 1
     } else if (symbol === '+') {
-      turtle.baseDirection += turn + turtle.angleVariation
+      turtle.baseDirection = shapeAngle(turtle.baseDirection + turn + turtle.angleVariation, turtle.depth)
       turtle.angle = turtle.baseDirection
     } else if (symbol === '-') {
-      turtle.baseDirection -= turn + turtle.angleVariation
+      turtle.baseDirection = shapeAngle(turtle.baseDirection - turn - turtle.angleVariation, turtle.depth)
       turtle.angle = turtle.baseDirection
     } else if (symbol === '[') {
       stack.push({ ...turtle })
@@ -211,7 +230,7 @@ export function generateSkeleton(input: PlantConfig): PlantSkeleton {
       Object.assign(turtle, {
         depth,
         age: turtle.age + 0.006 + depth * 0.004,
-        densityThreshold: depth >= 2 ? Math.max(turtle.densityThreshold, detailNext()) : turtle.densityThreshold,
+        densityThreshold: depth === 3 ? detailNext() : turtle.densityThreshold,
         branchId,
         branchStep: 0,
         crownProgress: depth === 1 ? parentProgress : turtle.crownProgress,
@@ -241,7 +260,7 @@ export function generateSkeleton(input: PlantConfig): PlantSkeleton {
       return segment.width * (0.55 + age * WIDTH_GROWTH_BY_LEVEL[segment.level])
     })(),
     visibility: (() => {
-      if (segment.depth >= 2 && segment.densityThreshold > 0.25 + config.density * 0.75) return 0
+      if (segment.depth >= 3 && segment.densityThreshold > config.density) return 0
       const range = rankRanges.get(segment.depth)!
       const order = range.max === range.min ? 0 : (segment.rank - range.min) / (range.max - range.min)
       const [start, spread, duration] = PHASE_SCHEDULE[segment.depth] ?? [3.15, 0.62, 0.2]
@@ -290,6 +309,7 @@ export function generateSkeleton(input: PlantConfig): PlantSkeleton {
 
 export function generateCrown(skeleton: PlantSkeleton, input: PlantConfig): PlantCrown {
   const density = clamp(input.density)
+  const crownDensity = smoothstep(density)
   const vitality = clamp(input.vitality)
   const curvature = clamp(input.curvature)
   const phase = Math.trunc(clamp(input.phase, 0, 3))
@@ -297,15 +317,19 @@ export function generateCrown(skeleton: PlantSkeleton, input: PlantConfig): Plan
   const smoothProgress = progress * progress * (3 - 2 * progress)
   const maturity = phase < 2 ? 0 : phase === 2 ? smoothProgress * 0.45 : 0.45 + smoothProgress * 0.55
   const microProgress = phase === 3 ? smoothProgress : 0
+  const treeHeight = Math.max(...skeleton.branches.map((branch) => branch.y2))
+  const crownAnchors = skeleton.foliageAnchors.filter((anchor) =>
+    anchor.depth <= 2 || random(input.seed ^ Math.imul(anchor.id + 1, 0x9e3779b1))() < 0.24)
   const terminalAnchors = skeleton.foliageAnchors.filter((anchor) => anchor.terminal)
   const microBranches: BranchSegment[] = []
   const regions: PlantCrown['regions'] = []
   const firstMicroBranchId = Math.max(...skeleton.branches.map((branch) => branch.branchId)) + 1
 
-  for (const [anchorIndex, anchor] of terminalAnchors.entries()) {
+  for (const anchor of crownAnchors) {
     const next = random(input.seed ^ 0xc2b2ae35 ^ Math.imul(anchor.id + 1, 0x27d4eb2d))
-    const radiusX = 4.8 + next() * 3.2
-    const radiusY = 3.5 + next() * 2.3
+    const heightScale = 0.8 + smoothstep(clamp(anchor.y / treeHeight)) * 0.42
+    const radiusX = (5.2 + next() * 3.6) * heightScale
+    const radiusY = (3.8 + next() * 2.5) * (0.9 + heightScale * 0.1)
     const depthVisual = clamp(anchor.depthVisual * 0.65 + next() * 0.35)
     const leaves = Array.from({ length: REGION_PARTICLES }, () => {
       const threshold = next()
@@ -320,7 +344,7 @@ export function generateCrown(skeleton: PlantSkeleton, input: PlantConfig): Plan
         vitality,
         depthVisual: clamp(depthVisual + (next() - 0.5) * 0.35),
       }
-    }).filter((leaf) => leaf.threshold <= density * maturity * anchor.visibility * (0.25 + vitality * 0.75))
+    }).filter((leaf) => leaf.threshold <= crownDensity * maturity * anchor.visibility * (0.25 + vitality * 0.75))
       .map(({ threshold: _threshold, ...leaf }) => leaf)
 
     regions.push({
@@ -330,12 +354,16 @@ export function generateCrown(skeleton: PlantSkeleton, input: PlantConfig): Plan
       radiusX,
       radiusY,
       depthVisual,
-      visibility: anchor.visibility * density * maturity * (0.35 + vitality * 0.65),
+      visibility: anchor.visibility * crownDensity * maturity * (0.35 + vitality * 0.65),
       tone: next(),
       vitality,
       leaves,
     })
+  }
 
+  for (const [anchorIndex, anchor] of terminalAnchors.entries()) {
+    const next = random(input.seed ^ 0xc2b2ae35 ^ Math.imul(anchor.id + 1, 0x27d4eb2d))
+    const depthVisual = clamp(anchor.depthVisual * 0.65 + next() * 0.35)
     for (let twig = 0; twig < MICRO_TWIGS; twig += 1) {
       const threshold = next()
       const branchId = firstMicroBranchId + anchorIndex * MICRO_TWIGS + twig
@@ -344,7 +372,7 @@ export function generateCrown(skeleton: PlantSkeleton, input: PlantConfig): Plan
       const baseDirection = anchor.angle + fan + traits.angleVariation
       const angle1 = baseDirection + traits.bendDirection * traits.bendStrength * smoothstep(0.5)
       const angle2 = baseDirection + traits.bendDirection * traits.bendStrength
-      const length1 = (0.22 + next() * 0.18) * traits.lengthScale
+      const length1 = (0.38 + next() * 0.2) * traits.lengthScale
       const length2 = length1 * (0.48 + next() * 0.2)
       const x2 = anchor.x + Math.cos(angle1) * length1
       const y2 = anchor.y + Math.sin(angle1) * length1
