@@ -86,7 +86,7 @@ export function generateSkeleton(input: PlantConfig): PlantSkeleton {
       turtle.angle += (next() - 0.5) * config.curvature * 0.16
       const depthLength = turtle.depth === 0
         ? 1.18
-        : (1.15 + config.branching * 0.65) * 0.93 ** (turtle.depth - 1)
+        : (1.05 + config.branching * 0.45) * 0.78 ** (turtle.depth - 1)
       const length = (1 + next() * 0.26) * depthLength
       const x = turtle.x + Math.cos(turtle.angle) * length
       const y = turtle.y + Math.sin(turtle.angle) * length

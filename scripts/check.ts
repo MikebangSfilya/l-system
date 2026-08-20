@@ -34,11 +34,13 @@ assert.ok(leafCount(stagePlants.at(-1)!) > leafCount(stagePlants[2]) * 2, 'folia
 
 const narrow = generateSkeleton({ ...config, growth: 1, branching: 0 })
 const branched = generateSkeleton({ ...config, growth: 1, branching: 1 })
+const branchLengths = branched.branches.map((branch) => Math.hypot(branch.x2 - branch.x1, branch.y2 - branch.y1))
 assert.ok(
   branched.branches.length > narrow.branches.length &&
     branched.bounds.maxX - branched.bounds.minX > (narrow.bounds.maxX - narrow.bounds.minX) * 2,
   'branching must add structure',
 )
+assert.ok(Math.min(...branchLengths) < Math.max(...branchLengths) * 0.5, 'twigs must be shorter than major branches')
 
 const sparse = generate({ ...config, growth: 1, density: 0 })
 const dense = generate({ ...config, growth: 1, density: 1 })
