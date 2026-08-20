@@ -515,6 +515,77 @@ function initialMatureFrontier(raw: RawSegment[]): MatureBud[] {
   return frontier
 }
 
+function extendMatureBud(
+  raw: RawSegment[],
+  config: PlantConfig,
+  bud: MatureBud,
+  epoch: number,
+  growth: number,
+  macroLean: number,
+  birthProgress: number,
+) {
+  const next = random(
+    config.seed ^ 0x4cf5ad43 ^ Math.imul(epoch + 1, 0x9e3779b1) ^ Math.imul(bud.branchId + 1, 0x85ebca6b),
+  )
+  const targetAngle = bud.role === 'trunk'
+    ? Math.PI / 2 + macroLean + Math.sin(epoch * 0.11 + config.seed) * config.curvature * 0.08
+    : bud.outward === 1
+      ? radians(bud.role === 'edge' ? 60 : 48 + next() * 24)
+      : radians(bud.role === 'edge' ? 120 : 108 + next() * 24)
+  const bendVelocity = bud.bendVelocity * 0.72 + (next() * 2 - 1) * config.curvature * (
+    bud.role === 'trunk' ? 0.018 : bud.role === 'edge' ? 0.055 : 0.095
+  )
+  const turnLimit = bud.role === 'trunk' ? radians(4) : bud.role === 'edge' ? radians(9) : radians(15)
+  let angle = bud.angle + clamp(
+    angleDelta(bud.angle, targetAngle) * 0.18 + bendVelocity,
+    -turnLimit,
+    turnLimit,
+  )
+  if (bud.role === 'trunk') {
+    angle = Math.PI / 2 + clamp(angleDelta(Math.PI / 2, angle), -radians(12), radians(12))
+  } else {
+    const direction = normalized(Math.cos(angle), Math.max(0.18, Math.sin(angle)))
+    angle = Math.atan2(direction.y, bud.outward * Math.max(0.12, Math.abs(direction.x)))
+  }
+
+  const baseLength = bud.role === 'trunk' ? 1.05 : bud.role === 'edge' ? 0.78 : 0.62
+  const length = baseLength * growth * (0.88 + next() * 0.24)
+  const nextX = bud.x + Math.cos(angle) * length
+  const nextY = bud.y + Math.sin(angle) * length
+  const id = raw.length
+  raw.push({
+    id,
+    parentId: bud.parentId,
+    branchId: bud.branchId,
+    branchProgress: bud.branchProgress + 1,
+    x1: bud.x,
+    y1: bud.y,
+    x2: nextX,
+    y2: nextY,
+    rank: 4 + epoch + birthProgress,
+    densityThreshold: bud.densityThreshold,
+    depth: bud.depth,
+    level: bud.level,
+    baseDirection: bud.baseDirection,
+    bendStrength: Math.abs(angleDelta(bud.baseDirection, angle)),
+    bendDirection: angleDelta(bud.baseDirection, angle) < 0 ? -1 : 1,
+    depthVisual: bud.depthVisual,
+    tone: bud.tone,
+    birthEpoch: epoch,
+    birthProgress,
+  })
+  return {
+    ...bud,
+    x: nextX,
+    y: nextY,
+    angle,
+    bendVelocity,
+    parentId: id,
+    branchProgress: bud.branchProgress + 1,
+    life: bud.life < 0 ? -1 : bud.life - 1,
+  }
+}
+
 function appendMatureGrowth(raw: RawSegment[], config: PlantConfig, matureAge: number) {
   if (matureAge <= 0) return
 
@@ -529,91 +600,39 @@ function appendMatureGrowth(raw: RawSegment[], config: PlantConfig, matureAge: n
     const continued: MatureBud[] = []
     const spawned: MatureBud[] = []
     const epochSize = Math.max(frontier.length, 1)
+    const epochStart = raw.length
 
     for (const [index, bud] of frontier.entries()) {
       if (index >= 96) break
-      const next = random(
-        config.seed ^ 0x4cf5ad43 ^ Math.imul(epoch + 1, 0x9e3779b1) ^ Math.imul(bud.branchId + 1, 0x85ebca6b),
-      )
-      const targetAngle = bud.role === 'trunk'
-        ? Math.PI / 2 + macroLean + Math.sin(epoch * 0.11 + config.seed) * config.curvature * 0.08
-        : bud.outward === 1
-          ? radians(bud.role === 'edge' ? 60 : 48 + next() * 24)
-          : radians(bud.role === 'edge' ? 120 : 108 + next() * 24)
-      const impulse = (next() * 2 - 1) * config.curvature * (
-        bud.role === 'trunk' ? 0.018 : bud.role === 'edge' ? 0.055 : 0.095
-      )
-      bud.bendVelocity = bud.bendVelocity * 0.72 + impulse
-      const turnLimit = bud.role === 'trunk' ? radians(4) : bud.role === 'edge' ? radians(9) : radians(15)
-      let angle = bud.angle + clamp(
-        angleDelta(bud.angle, targetAngle) * 0.18 + bud.bendVelocity,
-        -turnLimit,
-        turnLimit,
-      )
-      if (bud.role === 'trunk') {
-        angle = Math.PI / 2 + clamp(angleDelta(Math.PI / 2, angle), -radians(12), radians(12))
-      } else {
-        const direction = normalized(Math.cos(angle), Math.max(0.18, Math.sin(angle)))
-        const outwardX = bud.outward * Math.max(0.12, Math.abs(direction.x))
-        angle = Math.atan2(direction.y, outwardX)
-      }
-
-      const baseLength = bud.role === 'trunk' ? 1.05 : bud.role === 'edge' ? 0.78 : 0.62
-      const length = baseLength * growth * (0.88 + next() * 0.24)
-      const nextX = bud.x + Math.cos(angle) * length
-      const nextY = bud.y + Math.sin(angle) * length
-      const id = raw.length
       const birthProgress = index / epochSize * 0.72
-      raw.push({
-        id,
-        parentId: bud.parentId,
-        branchId: bud.branchId,
-        branchProgress: bud.branchProgress + 1,
-        x1: bud.x,
-        y1: bud.y,
-        x2: nextX,
-        y2: nextY,
-        rank: 4 + epoch + birthProgress,
-        densityThreshold: bud.densityThreshold,
-        depth: bud.depth,
-        level: bud.level,
-        baseDirection: bud.baseDirection,
-        bendStrength: Math.abs(angleDelta(bud.baseDirection, angle)),
-        bendDirection: angleDelta(bud.baseDirection, angle) < 0 ? -1 : 1,
-        depthVisual: bud.depthVisual,
-        tone: bud.tone,
-        birthEpoch: epoch,
-        birthProgress,
-      })
-
-      const remainingLife = bud.life < 0 ? -1 : bud.life - 1
-      if (remainingLife !== 0) continued.push({
-        ...bud,
-        x: nextX,
-        y: nextY,
-        angle,
-        parentId: id,
-        branchProgress: bud.branchProgress + 1,
-        life: remainingLife,
-      })
+      const grown = extendMatureBud(raw, config, bud, epoch, growth, macroLean, birthProgress)
+      if (grown.life !== 0) continued.push(grown)
 
       const spawnChance = bud.role === 'trunk'
         ? 0.04 + config.branching * 0.28
         : bud.role === 'edge' ? config.branching * 0.08 : config.branching * 0.055
-      if (continued.length + spawned.length < MAX_MATURE_FRONTIER && next() < spawnChance) {
-        const outward = (next() < 0.5 ? -1 : 1) as -1 | 1
+      const spawnNext = random(
+        config.seed ^ 0x67e8a953 ^ Math.imul(epoch + 1, 0x165667b1) ^ Math.imul(bud.branchId + 1, 0x27d4eb2d),
+      )
+      const firstMatureBranch = epoch === 0 && index < Math.ceil(config.branching * 3)
+      if (
+        continued.length + spawned.length < MAX_MATURE_FRONTIER
+        && raw.length - epochStart < 96
+        && (firstMatureBranch || spawnNext() < spawnChance)
+      ) {
+        const outward = (spawnNext() < 0.5 ? -1 : 1) as -1 | 1
         const depth = bud.role === 'trunk' ? 1 : Math.min(4, bud.depth + 1)
         const childAngle = outward === 1
-          ? radians(35 + next() * 30)
-          : Math.PI - radians(35 + next() * 30)
+          ? radians(35 + spawnNext() * 30)
+          : Math.PI - radians(35 + spawnNext() * 30)
         const branchId = nextBranchId++
         const childNext = random(config.seed ^ 0x7f4a7c15 ^ Math.imul(branchId + 1, 0x27d4eb2d))
-        spawned.push({
-          x: nextX,
-          y: nextY,
+        const child = {
+          x: grown.x,
+          y: grown.y,
           angle: childAngle,
           bendVelocity: 0,
-          parentId: id,
+          parentId: grown.parentId,
           branchId,
           branchProgress: 0,
           baseDirection: childAngle,
@@ -625,7 +644,10 @@ function appendMatureGrowth(raw: RawSegment[], config: PlantConfig, matureAge: n
           outward,
           role: 'branch',
           life: 4 + Math.floor(childNext() * 4 + config.branching * 3),
-        })
+        } satisfies MatureBud
+        const childProgress = Math.min(0.68, 0.42 + spawned.length * 0.04)
+        const grownChild = extendMatureBud(raw, config, child, epoch, growth, macroLean, childProgress)
+        if (grownChild.life !== 0) spawned.push(grownChild)
       }
     }
     frontier = [...continued, ...spawned].slice(0, MAX_MATURE_FRONTIER)

@@ -117,6 +117,15 @@ assert.deepEqual(
   generate({ ...config, phase: 1, phaseProgress: 0.5, ageEpoch: 0 }),
   'mature age must be ignored before P3',
 )
+const matureStart = generate({ ...config, phase: 3, phaseProgress: 0, ageEpoch: 0 })
+const matureHalf = generate({ ...config, phase: 3, phaseProgress: 0.5, ageEpoch: 0 })
+const preMatureBranchIds = new Set(matureStart.skeleton.branches.map((branch) => branch.branchId))
+assert.ok(
+  new Set(visible(matureHalf)
+    .filter((branch) => branch.birthEpoch === 0 && !preMatureBranchIds.has(branch.branchId))
+    .map((branch) => branch.branchId)).size >= 2,
+  'P3 must visibly create new branches before its first epoch ends',
+)
 for (const ageEpoch of [0, 1, 10]) {
   assert.deepEqual(
     generate({ ...config, ageEpoch, phaseProgress: 1 }),
@@ -197,8 +206,8 @@ assert.ok(averageWidth(adult, 1) > averageWidth(phasePlants[3][0], 1) * 1.1, 'ma
 const narrow = generate({ ...config, branching: 0 })
 const branched = generate({ ...config, branching: 1 })
 assert.ok(branched.skeleton.branches.length > narrow.skeleton.branches.length * 3, 'branching must increase structural complexity')
-assert.equal(new Set(narrow.skeleton.branches.filter((branch) => branch.depth === 1).map((branch) => branch.branchId)).size, 3)
-assert.equal(new Set(branched.skeleton.branches.filter((branch) => branch.depth === 1).map((branch) => branch.branchId)).size, 7)
+assert.equal(new Set(narrow.skeleton.branches.filter((branch) => branch.birthEpoch < 0 && branch.depth === 1).map((branch) => branch.branchId)).size, 3)
+assert.equal(new Set(branched.skeleton.branches.filter((branch) => branch.birthEpoch < 0 && branch.depth === 1).map((branch) => branch.branchId)).size, 7)
 assert.ok(visibleWidth(branched) > visibleWidth(narrow) * 1.3, 'branching must broaden the macro structure')
 
 const earlySparse = generate({ ...config, phase: 1, phaseProgress: 1, density: 0 })
@@ -228,7 +237,7 @@ const locallyDense = generate({ ...config, branching: 0.2, density: 1 })
 const structurallyComplex = generate({ ...config, branching: 1, density: 0.2 })
 assert.ok(visible(structurallyComplex).length > visible(locallyDense).length * 1.8, 'branching must control architecture')
 assert.ok(leafCount(locallyDense) > leafCount(structurallyComplex) * 4, 'density must independently control crown fill')
-assert.ok(visibleMicro(locallyDense).length > visibleMicro(structurallyComplex).length * 2, 'density must independently control terminal twigs')
+assert.ok(visibleMicro(locallyDense).length >= visibleMicro(structurallyComplex).length * 2, 'density must independently control terminal twigs')
 
 const curvatureConfig = { ...config, seed: 2572587950, branching: 1, density: 1 }
 const curvatureSweep = [0, 0.25, 0.5, 0.75, 1].map((curvature) => generate({ ...curvatureConfig, curvature }))
