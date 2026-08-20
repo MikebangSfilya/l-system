@@ -149,6 +149,21 @@ for (const seed of [1, 2, 3, 4, 5]) {
   assert.ok(leafCount(stages[2]) > 0 && leafCount(stages[3]) > leafCount(stages[2]), `seed ${seed}: crown must mature late`)
   assert.ok(visible(stages[0]).filter((branch) => branch.depth > 0).length < visible(stages[0]).filter((branch) => branch.depth === 0).length * 0.15, `seed ${seed}: seedling must stay trunk-first`)
   assert.ok(visibleWidth(stages[1]) >= visibleWidth(stages[3]) * 0.75, `seed ${seed}: structure phase must define the silhouette`)
+  assert.ok(stages.slice(1).every((stage, stageIndex) => stage.skeleton.branches.every((branch, branchIndex) =>
+    branch.visibility >= stages[stageIndex].skeleton.branches[branchIndex].visibility
+  )), `seed ${seed}: old branches must survive every phase`)
+  assert.deepEqual(
+    stages[3].skeleton.branches.filter((branch) => branch.depth <= 2).map(({ visibility }) => visibility),
+    stages[2].skeleton.branches.filter((branch) => branch.depth <= 2).map(({ visibility }) => visibility),
+    `seed ${seed}: maturity must preserve major branches`,
+  )
+  for (const phase of [0, 1, 2] as PlantPhase[]) {
+    assert.deepEqual(
+      generate({ ...config, seed, phase, phaseProgress: 1 }),
+      generate({ ...config, seed, phase: (phase + 1) as PlantPhase, phaseProgress: 0 }),
+      `seed ${seed}: phase ${phase} boundary must be continuous`,
+    )
+  }
   seedBlueprints.add(JSON.stringify(blueprint(plant)))
 }
 assert.equal(seedBlueprints.size, 5, 'different seeds must create unique trees')

@@ -58,7 +58,7 @@ type RawSegment = Omit<BranchSegment, 'visibility'> & {
 
 const PHASE_SCHEDULE = [
   [-0.06, 0.94, 0.08],
-  [0.94, 0.82, 0.24],
+  [0.94, 0.82, 0.3],
   [2, 0.58, 0.22],
   [2.18, 0.62, 0.22],
   [3, 0.45, 0.22],
