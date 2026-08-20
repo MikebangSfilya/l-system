@@ -5,6 +5,7 @@ import type { PlantConfig, PlantPhase } from './plant/types.ts'
 const initialConfig: PlantConfig = {
   phase: 3,
   phaseProgress: 1,
+  ageEpoch: 0,
   branching: 0.48,
   density: 0.71,
   curvature: 0.22,
@@ -12,7 +13,7 @@ const initialConfig: PlantConfig = {
   seed: 12345,
 }
 
-const sliders: Array<Exclude<keyof PlantConfig, 'phase' | 'seed'>> = [
+const sliders: Array<Exclude<keyof PlantConfig, 'phase' | 'seed' | 'ageEpoch'>> = [
   'phaseProgress',
   'branching',
   'density',
@@ -26,6 +27,7 @@ const phasePresets: Array<[PlantPhase, number]> = [
 
 export default function App() {
   const [config, setConfig] = useState(initialConfig)
+  const [fitRequest, setFitRequest] = useState(0)
   const update = <Key extends keyof PlantConfig>(key: Key, value: PlantConfig[Key]) =>
     setConfig((current) => ({ ...current, [key]: value }))
 
@@ -66,12 +68,33 @@ export default function App() {
             <button
               type="button"
               aria-pressed={config.phase === phase && config.phaseProgress === progress}
-              onClick={() => setConfig((current) => ({ ...current, phase, phaseProgress: progress }))}
+              onClick={() => setConfig((current) => ({ ...current, phase, phaseProgress: progress, ageEpoch: 0 }))}
               key={`${phase}-${progress}`}
             >
               P{phase} {progress * 100}%
             </button>
           ))}
+        </div>
+
+        <label>
+          <span>ageEpoch</span>
+          <input
+            type="number"
+            min="0"
+            step="1"
+            value={config.ageEpoch}
+            onChange={(event) => update('ageEpoch', Math.max(0, Math.trunc(event.currentTarget.valueAsNumber || 0)))}
+          />
+        </label>
+        <div className="epoch-buttons" aria-label="Mature age controls">
+          <button type="button" onClick={() => update('ageEpoch', config.ageEpoch + 1)}>+1 epoch</button>
+          <button type="button" onClick={() => update('ageEpoch', config.ageEpoch + 10)}>+10 epochs</button>
+          <button
+            type="button"
+            onClick={() => setConfig((current) => ({ ...current, ageEpoch: 0, phaseProgress: 0 }))}
+          >
+            Reset age
+          </button>
         </div>
 
         <label>
@@ -88,12 +111,13 @@ export default function App() {
         >
           Random seed
         </button>
+        <button type="button" onClick={() => setFitRequest((request) => request + 1)}>Fit tree</button>
         <pre>{JSON.stringify(config, null, 2)}</pre>
       </section>
 
       <section className="preview">
         <h2>Plant preview</h2>
-        <PlantCanvas config={config} />
+        <PlantCanvas config={config} fitRequest={fitRequest} />
       </section>
     </main>
   )

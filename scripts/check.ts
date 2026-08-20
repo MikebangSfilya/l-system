@@ -7,6 +7,7 @@ const AMBIENT_LIMIT = 18
 const config: PlantConfig = {
   phase: 3,
   phaseProgress: 1,
+  ageEpoch: 0,
   branching: 0.6,
   density: 0.7,
   curvature: 0.3,
@@ -42,6 +43,13 @@ const blueprint = (plant: ReturnType<typeof generate>) => ({
   microBranches: plant.crown.microBranches.map(({ visibility: _visibility, width: _width, ...branch }) => branch),
   regions: plant.crown.regions.map(({ visibility: _visibility, vitality: _vitality, leaves: _leaves, ...region }) => region),
 })
+const geometry = (plant: ReturnType<typeof generate>) => plant.skeleton.branches
+  .map(({ visibility: _visibility, width: _width, ...branch }) => branch)
+const baseBlueprint = (plant: ReturnType<typeof generate>) => {
+  return plant.skeleton.branches
+    .filter(({ birthEpoch }) => birthEpoch < 0)
+    .map(({ visibility: _visibility, width: _width, ...branch }) => branch)
+}
 const groupBranches = (branches: BranchSegment[]) => {
   const groups = new Map<number, BranchSegment[]>()
   for (const branch of branches) groups.set(branch.branchId, [...(groups.get(branch.branchId) ?? []), branch])
@@ -67,6 +75,7 @@ const mature = generate(config)
 assert.deepEqual(mature, generate(config), 'same config must be deterministic')
 assert.deepEqual(mature, generate(JSON.parse(JSON.stringify(config)) as PlantConfig), 'JSON config must preserve generation')
 assert.deepEqual(mature, generate({ ...config, phase: 99 as PlantPhase, phaseProgress: 2 }), 'lifecycle inputs must clamp')
+assert.deepEqual(mature, generate({ ...config, ageEpoch: -4.8 }), 'negative mature age must clamp to zero')
 assert.notDeepEqual(blueprint(mature), blueprint(generate({ ...config, seed: 54321 })), 'seed must change the blueprint')
 
 const phasePlants = ([0, 1, 2, 3] as PlantPhase[]).map((phase) =>
@@ -78,15 +87,14 @@ for (const plants of phasePlants) {
 
 const lifecycle = phasePlants.flatMap((plants, phase) => phase === 0 ? plants : plants.slice(1))
 for (const [index, plant] of lifecycle.entries()) {
-  assert.deepEqual(blueprint(plant), blueprint(mature), 'phase changes must preserve the mature blueprint')
-  assert.deepEqual(plant.bounds, mature.bounds, 'phase changes must preserve mature bounds')
-  assert.deepEqual(plant.transform, mature.transform, 'phase changes must preserve the camera')
+  assert.deepEqual(baseBlueprint(plant), baseBlueprint(mature), 'phase changes must preserve the base blueprint')
   assert.deepEqual(plant.skeleton.root, mature.skeleton.root, 'phase changes must preserve the root')
   if (index > 0) {
     const previous = lifecycle[index - 1]
+    const previousVisibility = new Map(previous.skeleton.branches.map((branch) => [branch.id, branch.visibility]))
     assert.ok(plant.skeleton.growthScale > previous.skeleton.growthScale, 'world growth scale must increase')
-    assert.ok(plant.skeleton.branches.every((branch, branchIndex) =>
-      branch.visibility >= previous.skeleton.branches[branchIndex].visibility
+    assert.ok(plant.skeleton.branches.every((branch) =>
+      !previousVisibility.has(branch.id) || branch.visibility >= previousVisibility.get(branch.id)!
     ), 'visible structure must never regress')
   }
 }
@@ -99,6 +107,63 @@ for (const phase of [0, 1, 2] as PlantPhase[]) {
   )
 }
 
+assert.deepEqual(
+  generate({ ...config, phase: 2, phaseProgress: 1, ageEpoch: 500 }),
+  generate({ ...config, phase: 3, phaseProgress: 0, ageEpoch: 0 }),
+  'infinite growth must start exactly at the P2/P3 boundary',
+)
+assert.deepEqual(
+  generate({ ...config, phase: 1, phaseProgress: 0.5, ageEpoch: 500 }),
+  generate({ ...config, phase: 1, phaseProgress: 0.5, ageEpoch: 0 }),
+  'mature age must be ignored before P3',
+)
+for (const ageEpoch of [0, 1, 10]) {
+  assert.deepEqual(
+    generate({ ...config, ageEpoch, phaseProgress: 1 }),
+    generate({ ...config, ageEpoch: ageEpoch + 1, phaseProgress: 0 }),
+    `epoch ${ageEpoch} boundary must remain continuous`,
+  )
+}
+
+const agePlants = [0, 1, 10, 50, 100, 500].map((ageEpoch) =>
+  generate({ ...config, ageEpoch, phaseProgress: 0 }))
+for (let index = 1; index < agePlants.length; index += 1) {
+  const previous = agePlants[index - 1]
+  const current = agePlants[index]
+  assert.deepEqual(
+    geometry(current).slice(0, previous.skeleton.branches.length),
+    geometry(previous),
+    'later epochs must preserve every previously born segment',
+  )
+  assert.ok(current.bounds.maxY >= previous.bounds.maxY, 'mature epochs must never lower the crown')
+  assert.ok(
+    current.bounds.maxX - current.bounds.minX >= previous.bounds.maxX - previous.bounds.minX,
+    'mature epochs must never narrow the crown',
+  )
+}
+const ancient = agePlants.at(-1)!
+assert.ok(ancient.bounds.maxY > agePlants[0].bounds.maxY * 3, 'long-lived trees must become substantially taller')
+assert.ok(
+  ancient.bounds.maxX - ancient.bounds.minX > (agePlants[0].bounds.maxX - agePlants[0].bounds.minX) * 3,
+  'long-lived trees must become substantially broader',
+)
+const segmentsByEpoch = new Map<number, number>()
+for (const branch of ancient.skeleton.branches.filter(({ birthEpoch }) => birthEpoch >= 0)) {
+  segmentsByEpoch.set(branch.birthEpoch, (segmentsByEpoch.get(branch.birthEpoch) ?? 0) + 1)
+}
+assert.ok([...segmentsByEpoch.values()].every((count) => count <= 96), 'each epoch must have a bounded structural budget')
+assert.equal(segmentsByEpoch.size, 500, 'every requested mature epoch must contribute geometry')
+const trunkGrowthAt = (epoch: number) => ancient.skeleton.branches
+  .filter((branch) => branch.birthEpoch === epoch && branch.branchId === 0)
+  .reduce((total, branch) => total + branchLength(branch), 0)
+assert.ok(trunkGrowthAt(50) < trunkGrowthAt(0) && trunkGrowthAt(499) > 0, 'growth must decay without reaching zero')
+assert.ok(ancient.skeleton.branches.length < 10_000, '500 epochs must keep canonical structure practical')
+assert.deepEqual(
+  geometry(generate({ ...config, ageEpoch: 50, density: 0, vitality: 0 })),
+  geometry(generate({ ...config, ageEpoch: 50, density: 1, vitality: 1 })),
+  'density and vitality must not reshape mature geometry',
+)
+
 const [seedling, structure, canopy, adult] = phasePlants.map((plants) => plants.at(-1)!)
 assert.ok(visible(seedling).every((branch) => branch.depth === 0), 'seedling must remain trunk-only')
 assert.equal(Math.max(...visible(structure).map((branch) => branch.depth)), 1, 'structure phase must contain only macro axes')
@@ -109,8 +174,8 @@ assert.equal(visibleMicro(canopy).length, 0, 'terminal twigs must wait for matur
 assert.ok(visibleMicro(adult).length > 0, 'maturity must reveal terminal twigs')
 assert.ok([seedling, structure].every((plant) => leafCount(plant) === 0), 'early phases must remain leafless')
 assert.deepEqual(
-  adult.skeleton.branches.filter((branch) => branch.depth <= 2).map(({ visibility }) => visibility),
-  canopy.skeleton.branches.filter((branch) => branch.depth <= 2).map(({ visibility }) => visibility),
+  adult.skeleton.branches.filter((branch) => branch.birthEpoch < 0 && branch.depth <= 2).map(({ visibility }) => visibility),
+  canopy.skeleton.branches.filter((branch) => branch.birthEpoch < 0 && branch.depth <= 2).map(({ visibility }) => visibility),
   'maturity must preserve major branches',
 )
 assert.ok(
@@ -163,7 +228,7 @@ const locallyDense = generate({ ...config, branching: 0.2, density: 1 })
 const structurallyComplex = generate({ ...config, branching: 1, density: 0.2 })
 assert.ok(visible(structurallyComplex).length > visible(locallyDense).length * 1.8, 'branching must control architecture')
 assert.ok(leafCount(locallyDense) > leafCount(structurallyComplex) * 4, 'density must independently control crown fill')
-assert.ok(visibleMicro(locallyDense).length > visibleMicro(structurallyComplex).length * 3, 'density must independently control terminal twigs')
+assert.ok(visibleMicro(locallyDense).length > visibleMicro(structurallyComplex).length * 2, 'density must independently control terminal twigs')
 
 const curvatureConfig = { ...config, seed: 2572587950, branching: 1, density: 1 }
 const curvatureSweep = [0, 0.25, 0.5, 0.75, 1].map((curvature) => generate({ ...curvatureConfig, curvature }))

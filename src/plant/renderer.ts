@@ -1,5 +1,41 @@
 import type { BranchSegment, PlantCrown, PlantSkeleton, ViewTransform } from './types.ts'
 
+const BRANCH_BUDGET = 6000
+const REGION_BUDGET = 1000
+const LEAF_BUDGET = 3000
+
+function limitEvenly<Item>(items: Item[], limit: number) {
+  if (items.length <= limit) return items
+  return Array.from({ length: limit }, (_, index) => items[Math.floor(index * items.length / limit)])
+}
+
+function screenPoint(
+  x: number,
+  y: number,
+  plant: PlantSkeleton,
+  transform: ViewTransform,
+) {
+  const scale = transform.scale * plant.growthScale
+  return {
+    x: transform.rootX + (x - plant.root.x) * scale,
+    y: transform.rootY - (y - plant.root.y) * scale,
+  }
+}
+
+function branchOnScreen(
+  branch: BranchSegment,
+  plant: PlantSkeleton,
+  transform: ViewTransform,
+  width: number,
+  height: number,
+) {
+  const start = screenPoint(branch.x1, branch.y1, plant, transform)
+  const end = screenPoint(branch.x2, branch.y2, plant, transform)
+  const margin = 24
+  return Math.max(start.x, end.x) >= -margin && Math.min(start.x, end.x) <= width + margin
+    && Math.max(start.y, end.y) >= -margin && Math.min(start.y, end.y) <= height + margin
+}
+
 function branchPath(ctx: CanvasRenderingContext2D, branch: BranchSegment) {
   ctx.moveTo(branch.x1, branch.y1)
   ctx.lineTo(
@@ -30,13 +66,15 @@ function renderBranches(ctx: CanvasRenderingContext2D, branches: BranchSegment[]
       for (let start = 0; start < visible.length; start += chunkSize) {
         const chunk = visible.slice(start, start + chunkSize)
         ctx.beginPath()
-        ctx.moveTo(chunk[0].x1, chunk[0].y1)
+        let previous: BranchSegment | undefined
         for (const branch of chunk) {
+          if (!previous || branch.parentId !== previous.id) ctx.moveTo(branch.x1, branch.y1)
           ctx.lineTo(
             branch.x1 + (branch.x2 - branch.x1) * branch.visibility,
             branch.y1 + (branch.y2 - branch.y1) * branch.visibility,
           )
           if (branch.visibility < 1) break
+          previous = branch
         }
         const width = chunk.reduce((total, branch) => total + branch.width, 0) / chunk.length
         ctx.lineWidth = Math.max(0.07, width * (inner ? 0.55 : 1.45) * depthWeight)
@@ -90,7 +128,35 @@ export function renderPlant(
   ctx.translate(-plant.root.x, -plant.root.y)
   ctx.lineJoin = 'round'
 
-  for (const region of crown.regions.filter(({ visibility }) => visibility > 0).sort((a, b) => a.depthVisual - b.depthVisual)) {
+  const screenScale = transform.scale * plant.growthScale
+  const structuralBranches = limitEvenly(plant.branches.filter((branch) =>
+    branch.visibility > 0
+    && branchOnScreen(branch, plant, transform, width, height)
+    && (branch.level <= 2 || Math.hypot(branch.x2 - branch.x1, branch.y2 - branch.y1) * screenScale >= 0.75)
+  ), BRANCH_BUDGET)
+  const microBudget = Math.max(0, BRANCH_BUDGET - structuralBranches.length)
+  const microBranches = limitEvenly(crown.microBranches.filter((branch) =>
+    branch.visibility > 0
+    && Math.hypot(branch.x2 - branch.x1, branch.y2 - branch.y1) * screenScale >= 1
+    && branchOnScreen(branch, plant, transform, width, height)
+  ), microBudget)
+  const visibleRegions = limitEvenly(crown.regions.filter((region) => {
+    if (region.visibility <= 0) return false
+    const center = screenPoint(region.x, region.y, plant, transform)
+    const radiusX = region.radiusX * screenScale
+    const radiusY = region.radiusY * screenScale
+    return center.x + radiusX >= 0 && center.x - radiusX <= width
+      && center.y + radiusY >= 0 && center.y - radiusY <= height
+  }), REGION_BUDGET).sort((a, b) => a.depthVisual - b.depthVisual)
+
+  ctx.beginPath()
+  for (const region of visibleRegions.filter((region) => Math.max(region.radiusX, region.radiusY) * screenScale < 1.5)) {
+    ctx.ellipse(region.x, region.y, region.radiusX, region.radiusY, 0, 0, Math.PI * 2)
+  }
+  ctx.fillStyle = 'rgba(77, 154, 57, 0.2)'
+  ctx.fill()
+
+  for (const region of visibleRegions.filter((region) => Math.max(region.radiusX, region.radiusY) * screenScale >= 1.5)) {
     ctx.save()
     ctx.translate(region.x, region.y)
     ctx.scale(region.radiusX, region.radiusY)
@@ -105,13 +171,16 @@ export function renderPlant(
     ctx.restore()
   }
 
-  renderBranches(ctx, plant.branches)
-  renderMicroBranches(ctx, crown.microBranches)
+  renderBranches(ctx, structuralBranches)
+  renderMicroBranches(ctx, microBranches)
 
-  for (const region of crown.regions) {
-    if (region.visibility <= 0 || region.leaves.length === 0) continue
+  let leavesLeft = LEAF_BUDGET
+  for (const region of visibleRegions) {
+    if (leavesLeft <= 0 || region.leaves.length === 0 || Math.max(region.radiusX, region.radiusY) * screenScale < 5) continue
+    const leaves = region.leaves.slice(0, leavesLeft)
+    leavesLeft -= leaves.length
     ctx.beginPath()
-    for (const leaf of region.leaves) {
+    for (const leaf of leaves) {
       const radius = leaf.size * (0.65 + leaf.depthVisual * 0.35) * (0.55 + region.visibility * 0.45)
       ctx.moveTo(region.x + leaf.x + radius, region.y + leaf.y)
       ctx.ellipse(region.x + leaf.x, region.y + leaf.y, radius, radius * 0.58, leaf.angle, 0, Math.PI * 2)

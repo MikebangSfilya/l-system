@@ -31,11 +31,16 @@ input[type='range'] { width: 100%; accent-color: #5f8d45; }
 input[type='number'] { width: 100%; padding: 6px 8px; color: inherit; background: #fff; border: 1px solid #aeba9f; }
 output { text-align: right; font-variant-numeric: tabular-nums; }
 button { width: 100%; padding: 8px; color: inherit; cursor: pointer; background: #edf2e8; border: 1px solid #aeba9f; border-radius: 4px; }
+.controls > button { margin-top: 8px; }
 .phase-buttons { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 18px; }
 .phase-buttons button { width: auto; flex: 1 0 52px; padding: 6px 2px; }
 .phase-buttons button[aria-pressed='true'] { color: white; background: #5f8d45; border-color: #477132; }
+.epoch-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin: -4px 0 14px; }
+.epoch-buttons button:last-child { grid-column: 1 / -1; }
 pre { overflow: auto; padding: 12px; background: #f2f0e9; font-size: 12px; }
-canvas { display: block; width: 100%; height: auto; border: 1px solid #b7c4ab; border-radius: 8px; box-shadow: 0 12px 30px rgba(49, 66, 39, 0.14); }
+canvas { display: block; width: 100%; height: auto; touch-action: none; cursor: grab; user-select: none; border: 1px solid #b7c4ab; border-radius: 8px; box-shadow: 0 12px 30px rgba(49, 66, 39, 0.14); }
+canvas:active { cursor: grabbing; }
+canvas:focus-visible { outline: 3px solid #5f8d45; outline-offset: 3px; }
 
 @media (max-width: 760px) {
   main { grid-template-columns: 1fr; }

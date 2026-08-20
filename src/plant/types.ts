@@ -4,6 +4,7 @@ export type BranchLevel = 0 | 1 | 2 | 3 | 4
 export type PlantConfig = {
   phase: PlantPhase
   phaseProgress: number
+  ageEpoch: number
   branching: number
   density: number
   curvature: number
@@ -29,6 +30,7 @@ export type BranchSegment = {
   depthVisual: number
   visibility: number
   tone: number
+  birthEpoch: number
 }
 
 export type Leaf = {
@@ -50,6 +52,7 @@ export type FoliageAnchor = {
   level: BranchLevel
   depthVisual: number
   visibility: number
+  birthEpoch: number
 }
 
 export type CrownRegion = {

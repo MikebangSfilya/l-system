@@ -6,6 +6,10 @@ const GROWTH_ROUNDS = 32
 const MICRO_TWIGS = 3
 const REGION_PARTICLES = 24
 const AMBIENT_PARTICLES = 18
+const MATURE_GROWTH_FLOOR = 0.18
+const MATURE_GROWTH_DECAY = 0.035
+const MAX_MATURE_FRONTIER = 64
+const MAX_CROWN_REGIONS = 512
 
 const PHASE_SCHEDULE = [
   [-0.06, 0.94, 0.08],
@@ -61,6 +65,7 @@ type Attractor = { x: number; y: number; alive: boolean }
 type RawSegment = Omit<BranchSegment, 'visibility' | 'width'> & {
   rank: number
   densityThreshold: number
+  birthProgress: number
 }
 
 type Bud = {
@@ -86,6 +91,25 @@ type Bud = {
   spawnSteps: number[]
   nextSpawn: number
   outward: -1 | 0 | 1
+}
+
+type MatureBud = {
+  x: number
+  y: number
+  angle: number
+  bendVelocity: number
+  parentId: number
+  branchId: number
+  branchProgress: number
+  baseDirection: number
+  depth: number
+  level: BranchLevel
+  depthVisual: number
+  tone: number
+  densityThreshold: number
+  outward: -1 | 0 | 1
+  role: 'trunk' | 'edge' | 'branch'
+  life: number
 }
 
 function crownShape(seed: number, height: number): CrownShape {
@@ -188,6 +212,7 @@ function normalizeConfig(input: PlantConfig): PlantConfig {
     ...input,
     phase: Math.trunc(clamp(input.phase, 0, 3)) as PlantPhase,
     phaseProgress: clamp(input.phaseProgress),
+    ageEpoch: Math.max(0, Math.trunc(Number.isFinite(input.ageEpoch) ? input.ageEpoch : 0)),
     branching: clamp(input.branching),
     density: clamp(input.density),
     curvature: clamp(input.curvature),
@@ -236,6 +261,8 @@ function growBlueprint(config: PlantConfig) {
       bendDirection: angleDelta(trunkDirection, trunkAngle) < 0 ? -1 : 1,
       depthVisual: trunkDepthVisual,
       tone: trunkTone,
+      birthEpoch: -1,
+      birthProgress: 0,
     })
     x = nextX
     y = nextY
@@ -386,6 +413,8 @@ function growBlueprint(config: PlantConfig) {
           : angleDelta(bud.baseDirection, segmentAngle) < 0 ? -1 : 1,
         depthVisual: bud.depthVisual,
         tone: bud.tone,
+        birthEpoch: -1,
+        birthProgress: 0,
       })
       bud.x = nextX
       bud.y = nextY
@@ -442,6 +471,167 @@ function growBlueprint(config: PlantConfig) {
   return raw
 }
 
+function matureGrowthRate(epoch: number) {
+  return MATURE_GROWTH_FLOOR + (1 - MATURE_GROWTH_FLOOR) * Math.exp(-MATURE_GROWTH_DECAY * epoch)
+}
+
+function initialMatureFrontier(raw: RawSegment[]): MatureBud[] {
+  const lastByBranch = new Map<number, RawSegment>()
+  for (const segment of raw) {
+    const previous = lastByBranch.get(segment.branchId)
+    if (!previous || segment.branchProgress > previous.branchProgress) lastByBranch.set(segment.branchId, segment)
+  }
+
+  const trunk = lastByBranch.get(0)!
+  const primaryTips = [...lastByBranch.values()].filter((segment) => segment.depth === 1)
+  const sideTip = (outward: -1 | 1) => primaryTips
+    .filter((segment) => Math.sign(Math.cos(segment.baseDirection)) === outward)
+    .reduce<RawSegment | undefined>((best, segment) => !best || segment.id > best.id ? segment : best, undefined)
+  const left = sideTip(-1)
+  const right = sideTip(1)
+
+  const make = (segment: RawSegment, role: MatureBud['role'], outward: MatureBud['outward']): MatureBud => ({
+    x: segment.x2,
+    y: segment.y2,
+    angle: Math.atan2(segment.y2 - segment.y1, segment.x2 - segment.x1),
+    bendVelocity: 0,
+    parentId: segment.id,
+    branchId: segment.branchId,
+    branchProgress: segment.branchProgress,
+    baseDirection: segment.baseDirection,
+    depth: segment.depth,
+    level: segment.level,
+    depthVisual: segment.depthVisual,
+    tone: segment.tone,
+    densityThreshold: 0,
+    outward,
+    role,
+    life: -1,
+  })
+
+  const frontier = [make(trunk, 'trunk', 0)]
+  if (left) frontier.push(make(left, 'edge', -1))
+  if (right && right.id !== left?.id) frontier.push(make(right, 'edge', 1))
+  return frontier
+}
+
+function appendMatureGrowth(raw: RawSegment[], config: PlantConfig, matureAge: number) {
+  if (matureAge <= 0) return
+
+  let frontier = initialMatureFrontier(raw)
+  let nextBranchId = Math.max(...raw.map((segment) => segment.branchId)) + 1
+  const epochCount = Math.ceil(matureAge)
+  const macroLean = (random(config.seed ^ 0x3bd39e10)() - 0.5) * radians(10)
+
+  // ponytail: epochs are rebuilt on config changes; add retained chunks only when profiling shows this loop is the bottleneck.
+  for (let epoch = 0; epoch < epochCount; epoch += 1) {
+    const growth = matureGrowthRate(epoch)
+    const continued: MatureBud[] = []
+    const spawned: MatureBud[] = []
+    const epochSize = Math.max(frontier.length, 1)
+
+    for (const [index, bud] of frontier.entries()) {
+      if (index >= 96) break
+      const next = random(
+        config.seed ^ 0x4cf5ad43 ^ Math.imul(epoch + 1, 0x9e3779b1) ^ Math.imul(bud.branchId + 1, 0x85ebca6b),
+      )
+      const targetAngle = bud.role === 'trunk'
+        ? Math.PI / 2 + macroLean + Math.sin(epoch * 0.11 + config.seed) * config.curvature * 0.08
+        : bud.outward === 1
+          ? radians(bud.role === 'edge' ? 60 : 48 + next() * 24)
+          : radians(bud.role === 'edge' ? 120 : 108 + next() * 24)
+      const impulse = (next() * 2 - 1) * config.curvature * (
+        bud.role === 'trunk' ? 0.018 : bud.role === 'edge' ? 0.055 : 0.095
+      )
+      bud.bendVelocity = bud.bendVelocity * 0.72 + impulse
+      const turnLimit = bud.role === 'trunk' ? radians(4) : bud.role === 'edge' ? radians(9) : radians(15)
+      let angle = bud.angle + clamp(
+        angleDelta(bud.angle, targetAngle) * 0.18 + bud.bendVelocity,
+        -turnLimit,
+        turnLimit,
+      )
+      if (bud.role === 'trunk') {
+        angle = Math.PI / 2 + clamp(angleDelta(Math.PI / 2, angle), -radians(12), radians(12))
+      } else {
+        const direction = normalized(Math.cos(angle), Math.max(0.18, Math.sin(angle)))
+        const outwardX = bud.outward * Math.max(0.12, Math.abs(direction.x))
+        angle = Math.atan2(direction.y, outwardX)
+      }
+
+      const baseLength = bud.role === 'trunk' ? 1.05 : bud.role === 'edge' ? 0.78 : 0.62
+      const length = baseLength * growth * (0.88 + next() * 0.24)
+      const nextX = bud.x + Math.cos(angle) * length
+      const nextY = bud.y + Math.sin(angle) * length
+      const id = raw.length
+      const birthProgress = index / epochSize * 0.72
+      raw.push({
+        id,
+        parentId: bud.parentId,
+        branchId: bud.branchId,
+        branchProgress: bud.branchProgress + 1,
+        x1: bud.x,
+        y1: bud.y,
+        x2: nextX,
+        y2: nextY,
+        rank: 4 + epoch + birthProgress,
+        densityThreshold: bud.densityThreshold,
+        depth: bud.depth,
+        level: bud.level,
+        baseDirection: bud.baseDirection,
+        bendStrength: Math.abs(angleDelta(bud.baseDirection, angle)),
+        bendDirection: angleDelta(bud.baseDirection, angle) < 0 ? -1 : 1,
+        depthVisual: bud.depthVisual,
+        tone: bud.tone,
+        birthEpoch: epoch,
+        birthProgress,
+      })
+
+      const remainingLife = bud.life < 0 ? -1 : bud.life - 1
+      if (remainingLife !== 0) continued.push({
+        ...bud,
+        x: nextX,
+        y: nextY,
+        angle,
+        parentId: id,
+        branchProgress: bud.branchProgress + 1,
+        life: remainingLife,
+      })
+
+      const spawnChance = bud.role === 'trunk'
+        ? 0.04 + config.branching * 0.28
+        : bud.role === 'edge' ? config.branching * 0.08 : config.branching * 0.055
+      if (continued.length + spawned.length < MAX_MATURE_FRONTIER && next() < spawnChance) {
+        const outward = (next() < 0.5 ? -1 : 1) as -1 | 1
+        const depth = bud.role === 'trunk' ? 1 : Math.min(4, bud.depth + 1)
+        const childAngle = outward === 1
+          ? radians(35 + next() * 30)
+          : Math.PI - radians(35 + next() * 30)
+        const branchId = nextBranchId++
+        const childNext = random(config.seed ^ 0x7f4a7c15 ^ Math.imul(branchId + 1, 0x27d4eb2d))
+        spawned.push({
+          x: nextX,
+          y: nextY,
+          angle: childAngle,
+          bendVelocity: 0,
+          parentId: id,
+          branchId,
+          branchProgress: 0,
+          baseDirection: childAngle,
+          depth,
+          level: levelOf(depth),
+          depthVisual: childNext(),
+          tone: childNext(),
+          densityThreshold: depth >= 3 ? childNext() : 0,
+          outward,
+          role: 'branch',
+          life: 4 + Math.floor(childNext() * 4 + config.branching * 3),
+        })
+      }
+    }
+    frontier = [...continued, ...spawned].slice(0, MAX_MATURE_FRONTIER)
+  }
+}
+
 function widthBySupport(raw: RawSegment[]) {
   const children = raw.map(() => [] as number[])
   for (const segment of raw) if (segment.parentId !== null) children[segment.parentId].push(segment.id)
@@ -453,7 +643,7 @@ function widthBySupport(raw: RawSegment[]) {
       ? 1
       : children[id].reduce((total, childId) => total + support[childId], 0)
     const segment = raw[id]
-    const pipeWidth = (0.04 + 0.24 * support[id] ** (1 / 2.35)) * (1 - smoothstep(segment.branchProgress) * 0.12)
+    const pipeWidth = (0.04 + 0.24 * support[id] ** (1 / 2.35)) * (1 - smoothstep(clamp(segment.branchProgress)) * 0.12)
     widths[id] = clamp(pipeWidth, WIDTH_MIN[segment.level], WIDTH_MAX[segment.level])
   }
   return widths
@@ -462,11 +652,13 @@ function widthBySupport(raw: RawSegment[]) {
 export function generateSkeleton(input: PlantConfig): PlantSkeleton {
   const config = normalizeConfig(input)
   const raw = growBlueprint(config)
+  const matureAge = config.phase === 3 ? config.ageEpoch + config.phaseProgress : 0
+  appendMatureGrowth(raw, config, matureAge)
   const baseWidths = widthBySupport(raw)
-  const stage = config.phase + config.phaseProgress
+  const stage = config.phase === 3 ? 3 + clamp(matureAge) : config.phase + config.phaseProgress
   const growthScale = 0.3 + 0.7 * (stage / 4) ** 0.65
   const rankRanges = new Map<number, { min: number; max: number }>()
-  for (const segment of raw) {
+  for (const segment of raw.filter(({ birthEpoch }) => birthEpoch < 0)) {
     const range = rankRanges.get(segment.depth)
     rankRanges.set(segment.depth, range
       ? { min: Math.min(range.min, segment.rank), max: Math.max(range.max, segment.rank) }
@@ -478,10 +670,17 @@ export function generateSkeleton(input: PlantConfig): PlantSkeleton {
     width: (() => {
       const birth = Math.max(0, PHASE_SCHEDULE[segment.level][0])
       const age = clamp((stage - birth) / (4 - birth))
-      return baseWidths[index] * (0.55 + age * WIDTH_GROWTH[segment.level])
+      const branchAge = Math.max(0, matureAge - Math.max(0, segment.birthEpoch))
+      const ageWidth = segment.level === 0
+        ? Math.min(2.5, 1 + 0.08 * Math.log2(1 + branchAge))
+        : segment.level === 1 ? Math.min(1.7, 1 + 0.04 * Math.log2(1 + branchAge)) : 1
+      return baseWidths[index] * (0.55 + age * WIDTH_GROWTH[segment.level]) * ageWidth
     })(),
     visibility: (() => {
       if (segment.depth >= 3 && segment.densityThreshold > config.density) return 0
+      if (segment.birthEpoch >= 0) {
+        return clamp((matureAge - segment.birthEpoch - segment.birthProgress) / 0.28)
+      }
       const range = rankRanges.get(segment.depth)!
       const order = range.max === range.min ? 0 : (segment.rank - range.min) / (range.max - range.min)
       const [start, spread, duration] = PHASE_SCHEDULE[segment.level]
@@ -489,49 +688,69 @@ export function generateSkeleton(input: PlantConfig): PlantSkeleton {
     })(),
   }))
   const branchesById = new Map(branchesWithIds.map((segment) => [segment.id, segment]))
-  const sameAxisParents = new Set<number>()
+  const sameAxisChildren = new Map<number, (typeof branchesWithIds)[number]>()
   const axesWithChildren = new Set<number>()
   for (const segment of branchesWithIds) {
     if (segment.parentId === null) continue
     const parent = branchesById.get(segment.parentId)!
-    if (parent.branchId === segment.branchId) sameAxisParents.add(parent.id)
+    if (parent.branchId === segment.branchId) sameAxisChildren.set(parent.id, segment)
     else axesWithChildren.add(parent.branchId)
   }
   const foliageAnchors = branchesWithIds
-    .filter((segment) => (segment.depth > 0 || segment.branchId === 0) && !sameAxisParents.has(segment.id))
-    .map((segment) => ({
-      id: segment.id,
-      x: segment.x2,
-      y: segment.y2,
-      angle: Math.atan2(segment.y2 - segment.y1, segment.x2 - segment.x1),
-      terminal: segment.branchId === 0 || !axesWithChildren.has(segment.branchId),
-      depth: segment.depth,
-      level: segment.level,
-      depthVisual: segment.depthVisual,
-      visibility: segment.visibility,
-    }))
-  const branches = branchesWithIds.map(({ rank: _rank, densityThreshold: _densityThreshold, ...segment }) => segment)
+    .filter((segment) => {
+      const child = sameAxisChildren.get(segment.id)
+      return (segment.depth > 0 || segment.branchId === 0)
+        && (!child || (child.birthEpoch >= 0 && child.visibility < 1) || child.birthEpoch > segment.birthEpoch)
+    })
+    .map((segment) => {
+      const child = sameAxisChildren.get(segment.id)
+      return {
+        id: segment.id,
+        x: segment.x2,
+        y: segment.y2,
+        angle: Math.atan2(segment.y2 - segment.y1, segment.x2 - segment.x1),
+        terminal: Boolean(child && ((child.birthEpoch >= 0 && child.visibility < 1) || child.birthEpoch > segment.birthEpoch))
+          || segment.branchId === 0 || !axesWithChildren.has(segment.branchId),
+        depth: segment.depth,
+        level: segment.level,
+        depthVisual: segment.depthVisual,
+        visibility: segment.visibility,
+        birthEpoch: segment.birthEpoch,
+      }
+    })
+  const branches = branchesWithIds.map(({
+    rank: _rank,
+    densityThreshold: _densityThreshold,
+    birthProgress: _birthProgress,
+    ...segment
+  }) => segment)
 
   return { root: { x: 0, y: 0 }, branches, foliageAnchors, growthScale }
 }
 
 export function generateCrown(skeleton: PlantSkeleton, input: PlantConfig): PlantCrown {
-  const density = clamp(input.density)
+  const config = normalizeConfig(input)
+  const density = config.density
   const crownDensity = smoothstep(density)
-  const vitality = clamp(input.vitality)
-  const curvature = clamp(input.curvature)
-  const phase = Math.trunc(clamp(input.phase, 0, 3))
-  const progress = clamp(input.phaseProgress)
+  const vitality = config.vitality
+  const curvature = config.curvature
+  const phase = config.phase
+  const progress = config.phaseProgress
+  const matureAge = phase === 3 ? config.ageEpoch + progress : 0
   const smoothProgress = smoothstep(progress)
-  const maturity = phase < 2 ? 0 : phase === 2 ? smoothProgress * 0.45 : 0.45 + smoothProgress * 0.55
-  const microProgress = phase === 3 ? smoothProgress : 0
-  const treeHeight = Math.max(...skeleton.branches.map((branch) => branch.y2))
+  const matureProgress = smoothstep(clamp(matureAge))
+  const maturity = phase < 2 ? 0 : phase === 2 ? smoothProgress * 0.45 : 0.45 + matureProgress * 0.55
+  const microProgress = phase === 3 ? matureProgress : 0
+  const baseTreeHeight = Math.max(...skeleton.branches.filter((branch) => branch.birthEpoch < 0).map((branch) => branch.y2))
+  const branchById = new Map(skeleton.branches.map((branch) => [branch.id, branch]))
   const candidateAnchors = skeleton.foliageAnchors
-    .filter((anchor) => anchor.depth === 0 || anchor.depth === 2 || (anchor.terminal && anchor.depth >= 2))
+    .filter((anchor) => anchor.birthEpoch < 0
+      ? anchor.depth === 0 || anchor.depth === 2 || (anchor.terminal && anchor.depth >= 2)
+      : anchor.terminal && anchor.depth >= 1)
     .sort((left, right) => Number(right.terminal) - Number(left.terminal) || left.id - right.id)
   const crownAnchors = candidateAnchors.reduce<typeof candidateAnchors>((selected, anchor) => {
-    const minimumDistance = treeHeight * 0.05
-    if (selected.length < 72 && selected.every((other) => Math.hypot(anchor.x - other.x, anchor.y - other.y) >= minimumDistance)) {
+    const minimumDistance = baseTreeHeight * 0.035
+    if (selected.length < MAX_CROWN_REGIONS && selected.every((other) => Math.hypot(anchor.x - other.x, anchor.y - other.y) >= minimumDistance)) {
       selected.push(anchor)
     }
     return selected
@@ -540,11 +759,13 @@ export function generateCrown(skeleton: PlantSkeleton, input: PlantConfig): Plan
   const microBranches: BranchSegment[] = []
   const regions: PlantCrown['regions'] = []
   const firstMicroBranchId = Math.max(...skeleton.branches.map((branch) => branch.branchId)) + 1
+  const firstMicroId = Math.max(...skeleton.branches.map((branch) => branch.id)) + 1
 
   for (const anchor of crownAnchors) {
-    const next = random(input.seed ^ 0xc2b2ae35 ^ Math.imul(anchor.id + 1, 0x27d4eb2d))
-    const heightScale = 0.88 + smoothstep(clamp(anchor.y / treeHeight)) * 0.25
-    const radiusX = treeHeight * (0.055 + next() * 0.038) * heightScale
+    const regionKey = branchById.get(anchor.id)?.branchId ?? anchor.id
+    const next = random(config.seed ^ 0xc2b2ae35 ^ Math.imul(regionKey + 1, 0x27d4eb2d))
+    const heightScale = 0.88 + smoothstep(clamp(anchor.y / baseTreeHeight)) * 0.25
+    const radiusX = baseTreeHeight * (0.055 + next() * 0.038) * heightScale
     const radiusY = radiusX * (0.58 + next() * 0.18)
     const depthVisual = clamp(anchor.depthVisual * 0.65 + next() * 0.35)
     const leaves = Array.from({ length: REGION_PARTICLES }, () => {
@@ -578,7 +799,9 @@ export function generateCrown(skeleton: PlantSkeleton, input: PlantConfig): Plan
   }
 
   for (const [anchorIndex, anchor] of terminalAnchors.entries()) {
-    const next = random(input.seed ^ 0xd1310ba6 ^ Math.imul(anchor.id + 1, 0x27d4eb2d))
+    const regionKey = branchById.get(anchor.id)?.branchId ?? anchor.id
+    const next = random(config.seed ^ 0xd1310ba6 ^ Math.imul(regionKey + 1, 0x27d4eb2d))
+    const localMicroProgress = anchor.birthEpoch < 0 ? microProgress : clamp(matureAge - anchor.birthEpoch)
     for (let twig = 0; twig < MICRO_TWIGS; twig += 1) {
       const threshold = next()
       const branchId = firstMicroBranchId + anchorIndex * MICRO_TWIGS + twig
@@ -598,7 +821,7 @@ export function generateCrown(skeleton: PlantSkeleton, input: PlantConfig): Plan
       const enabled = threshold <= density ? anchor.visibility : 0
       const depthVisual = clamp(anchor.depthVisual * 0.72 + next() * 0.28)
       const width = 0.12 + next() * 0.04
-      const id = skeleton.branches.length + microBranches.length
+      const id = firstMicroId + microBranches.length
       microBranches.push(
         {
           id,
@@ -616,8 +839,9 @@ export function generateCrown(skeleton: PlantSkeleton, input: PlantConfig): Plan
           bendStrength,
           bendDirection,
           depthVisual,
-          visibility: enabled * clamp((microProgress - start) / 0.18),
+          visibility: enabled * clamp((localMicroProgress - start) / 0.18),
           tone: next(),
+          birthEpoch: anchor.birthEpoch,
         },
         {
           id: id + 1,
@@ -635,14 +859,15 @@ export function generateCrown(skeleton: PlantSkeleton, input: PlantConfig): Plan
           bendStrength,
           bendDirection,
           depthVisual,
-          visibility: enabled * clamp((microProgress - start - 0.12) / 0.2),
+          visibility: enabled * clamp((localMicroProgress - start - 0.12) / 0.2),
           tone: next(),
+          birthEpoch: anchor.birthEpoch,
         },
       )
     }
   }
 
-  const ambientNext = random(input.seed ^ 0x94d049bb)
+  const ambientNext = random(config.seed ^ 0x94d049bb)
   const ambientParticles: PlantCrown['ambientParticles'] = []
   for (let index = 0; index < AMBIENT_PARTICLES && regions.length > 0; index += 1) {
     const region = regions[Math.floor(ambientNext() * regions.length)]
