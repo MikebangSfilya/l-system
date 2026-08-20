@@ -1,7 +1,7 @@
 :root {
   font-family: Inter, system-ui, sans-serif;
-  color: #c9edff;
-  background: #010b14;
+  color: #2e3829;
+  background: #e8eee2;
 }
 
 * { box-sizing: border-box; }
@@ -18,24 +18,24 @@ main {
 
 .controls, .preview {
   padding: 20px;
-  border: 1px solid #123b58;
+  border: 1px solid #c7d2bd;
   border-radius: 12px;
-  background: #061828;
-  box-shadow: 0 16px 45px rgba(0, 0, 0, 0.28);
+  background: #fffdf8;
+  box-shadow: 0 16px 45px rgba(49, 66, 39, 0.12);
 }
 
 h1, h2 { margin: 0 0 20px; }
 .controls label { display: grid; grid-template-columns: 78px 1fr 42px; align-items: center; gap: 8px; margin: 12px 0; }
 .controls label:has(input[type='number']) { grid-template-columns: 78px 1fr; }
-input[type='range'] { width: 100%; accent-color: #19c7ff; }
-input[type='number'] { width: 100%; padding: 6px 8px; color: inherit; background: #03111e; border: 1px solid #1b4b68; }
+input[type='range'] { width: 100%; accent-color: #5f8d45; }
+input[type='number'] { width: 100%; padding: 6px 8px; color: inherit; background: #fff; border: 1px solid #aeba9f; }
 output { text-align: right; font-variant-numeric: tabular-nums; }
-button { width: 100%; padding: 8px; color: inherit; cursor: pointer; background: #0a2940; border: 1px solid #1d5777; border-radius: 4px; }
+button { width: 100%; padding: 8px; color: inherit; cursor: pointer; background: #edf2e8; border: 1px solid #aeba9f; border-radius: 4px; }
 .phase-buttons { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 18px; }
 .phase-buttons button { width: auto; flex: 1 0 52px; padding: 6px 2px; }
-.phase-buttons button[aria-pressed='true'] { color: white; background: #087cab; border-color: #1bcaff; }
-pre { overflow: auto; padding: 12px; background: #03111e; font-size: 12px; }
-canvas { display: block; width: 100%; height: auto; border: 1px solid #0c3550; border-radius: 8px; box-shadow: 0 0 30px rgba(0, 183, 255, 0.12); }
+.phase-buttons button[aria-pressed='true'] { color: white; background: #5f8d45; border-color: #477132; }
+pre { overflow: auto; padding: 12px; background: #f2f0e9; font-size: 12px; }
+canvas { display: block; width: 100%; height: auto; border: 1px solid #b7c4ab; border-radius: 8px; box-shadow: 0 12px 30px rgba(49, 66, 39, 0.14); }
 
 @media (max-width: 760px) {
   main { grid-template-columns: 1fr; }

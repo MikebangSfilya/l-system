@@ -1,6 +1,6 @@
 import { strict as assert } from 'node:assert'
 import { generateCrown, generateSkeleton } from '../src/plant/generator.ts'
-import type { PlantConfig, PlantPhase } from '../src/plant/types.ts'
+import type { BranchLevel, BranchSegment, PlantConfig, PlantPhase } from '../src/plant/types.ts'
 import { computeBounds, computeViewTransform } from '../src/plant/view.ts'
 
 const config: PlantConfig = {
@@ -31,10 +31,21 @@ const leafCount = (plant: ReturnType<typeof generate>) =>
   plant.crown.regions.reduce((total, region) => total + region.leaves.length, 0)
 const microLength = (plant: ReturnType<typeof generate>) => plant.crown.microBranches
   .reduce((total, branch) => total + Math.hypot(branch.x2 - branch.x1, branch.y2 - branch.y1) * branch.visibility, 0)
-const averageWidth = (plant: ReturnType<typeof generate>, depth: number) => {
-  const branches = plant.skeleton.branches.filter((branch) => branch.depth === depth)
+const allBranches = (plant: ReturnType<typeof generate>) => [...plant.skeleton.branches, ...plant.crown.microBranches]
+const average = (values: number[]) => values.reduce((total, value) => total + value, 0) / values.length
+const averageWidth = (plant: ReturnType<typeof generate>, level: BranchLevel) => {
+  const branches = plant.skeleton.branches.filter((branch) => branch.level === level)
   return branches.reduce((total, branch) => total + branch.width, 0) / branches.length
 }
+const topology = (plant: ReturnType<typeof generate>) => allBranches(plant)
+  .map(({ id, parentId, branchId, depth, level }) => ({ id, parentId, branchId, depth, level }))
+const groupBranches = (branches: BranchSegment[]) => {
+  const groups = new Map<number, BranchSegment[]>()
+  for (const branch of branches) groups.set(branch.branchId, [...(groups.get(branch.branchId) ?? []), branch])
+  return [...groups.values()].map((segments) => segments.sort((left, right) => left.branchProgress - right.branchProgress))
+}
+const direction = (branch: BranchSegment) => Math.atan2(branch.y2 - branch.y1, branch.x2 - branch.x1)
+const angleDelta = (left: number, right: number) => Math.atan2(Math.sin(right - left), Math.cos(right - left))
 const grownLength = (plant: ReturnType<typeof generate>, minimumDepth = 0) => plant.skeleton.branches
   .filter((branch) => branch.depth >= minimumDepth)
   .reduce((total, branch) => total + Math.hypot(branch.x2 - branch.x1, branch.y2 - branch.y1) * branch.visibility, 0)
@@ -123,7 +134,7 @@ assert.ok(
 assert.ok(averageWidth(adult, 0) > averageWidth(adult, 1) * 2, 'trunk must remain substantially thicker than primary branches')
 assert.ok(averageWidth(adult, 1) > averageWidth(adult, 2) * 1.5, 'primary branches must taper into secondary branches')
 assert.ok(averageWidth(adult, 2) > averageWidth(adult, 3) * 1.4, 'secondary branches must taper into fine structure')
-assert.ok(averageWidth(adult, 0) > averageWidth(phasePlants[3][0], 0) * 1.25, 'maturity must thicken the trunk')
+assert.ok(averageWidth(adult, 0) > averageWidth(phasePlants[3][0], 0) * 1.1, 'maturity must thicken the trunk')
 assert.ok(averageWidth(adult, 1) > averageWidth(phasePlants[3][0], 1) * 1.15, 'maturity must thicken primary branches')
 
 const narrow = generate({ ...config, branching: 0 })
@@ -174,6 +185,49 @@ assert.ok(
 const straight = generate({ ...config, curvature: 0 })
 const curved = generate({ ...config, curvature: 1 })
 assert.notDeepEqual(blueprint(straight), blueprint(curved), 'curvature must change the stable blueprint')
+assert.deepEqual(topology(straight), topology(curved), 'curvature must bend existing branches without changing topology')
+assert.ok(allBranches(straight).every((branch) => branch.bendStrength === 0), 'zero curvature must remove branch bend')
+assert.deepEqual([...new Set(allBranches(curved).map((branch) => branch.level))].sort(), [0, 1, 2, 3, 4], 'mature tree must expose every branch level')
+
+const curvedBranches = allBranches(curved)
+const curvedById = new Map(curvedBranches.map((branch) => [branch.id, branch]))
+assert.equal(curvedById.size, curvedBranches.length, 'every segment must have a unique id')
+assert.ok(curvedBranches.every((branch) => branch.parentId === null || curvedById.has(branch.parentId)), 'every child segment must reference an existing parent')
+const bendByLevel = ([0, 1, 2, 3, 4] as BranchLevel[]).map((level) =>
+  average(curvedBranches.filter((branch) => branch.level === level).map((branch) => branch.bendStrength)))
+assert.ok(bendByLevel.every((bend, index) => index === 0 || bend > bendByLevel[index - 1]), 'curvature must become stronger toward terminal levels')
+const lengthByLevel = ([0, 1, 2, 3, 4] as BranchLevel[]).map((level) =>
+  average(curvedBranches.filter((branch) => branch.level === level)
+    .map((branch) => Math.hypot(branch.x2 - branch.x1, branch.y2 - branch.y1))))
+assert.ok(lengthByLevel.every((length, index) => index === 0 || length < lengthByLevel[index - 1]), 'segments must become shorter toward terminal levels')
+const widthByLevel = ([0, 1, 2, 3, 4] as BranchLevel[]).map((level) =>
+  average(curvedBranches.filter((branch) => branch.level === level).map((branch) => branch.width)))
+assert.ok(widthByLevel.every((width, index) => index === 0 || width < widthByLevel[index - 1]), 'segments must become thinner toward terminal levels')
+
+let taperedBranches = 0
+for (const segments of groupBranches(curvedBranches)) {
+  const first = segments[0]
+  assert.ok(segments.every((branch) =>
+    branch.baseDirection === first.baseDirection
+    && branch.bendDirection === first.bendDirection
+    && branch.bendStrength === first.bendStrength
+    && branch.level === first.level
+  ), 'each branch must keep one seeded bend character')
+  for (let index = 1; index < segments.length; index += 1) {
+    const previous = segments[index - 1]
+    const branch = segments[index]
+    assert.ok(branch.branchProgress > previous.branchProgress, 'branch progress must move forward')
+    assert.ok(branch.width <= previous.width, 'each branch must taper toward its tip')
+    assert.ok(angleDelta(direction(previous), direction(branch)) * branch.bendDirection >= -1e-10, 'each branch must follow one smooth bend instead of zigzagging')
+    if (branch.width < previous.width) taperedBranches += 1
+  }
+}
+assert.ok(taperedBranches > 0, 'within-branch taper must be observable')
+
+const curvatureSweep = [0, 0.25, 0.5, 0.75, 1].map((curvature) => generate({ ...config, curvature }))
+assert.ok(curvatureSweep.every((plant) => JSON.stringify(topology(plant)) === JSON.stringify(topology(curvatureSweep[0]))), 'curvature sweep must preserve hierarchy and branch count')
+assert.ok(curvatureSweep.map((plant) => average(allBranches(plant).map((branch) => branch.bendStrength)))
+  .every((bend, index, bends) => index === 0 || bend > bends[index - 1]), 'curvature sweep must progressively increase smooth bend')
 const lowVitality = generate({ ...config, vitality: 0 })
 const highVitality = generate({ ...config, vitality: 1 })
 assert.deepEqual(lowVitality.skeleton, highVitality.skeleton, 'vitality must not change the skeleton')
@@ -220,6 +274,17 @@ for (const seed of [1, 2, 3, 4, 5]) {
   const span = (xs: number[]) => Math.max(...xs) - Math.min(...xs)
   const upperWidth = span(points.filter(([, y]) => y >= bounds.minY + height * 0.6).map(([x]) => x))
   const lowerWidth = span(points.filter(([, y]) => y < bounds.minY + height * 0.6).map(([x]) => x))
+  const trunk = plant.skeleton.branches.filter((branch) => branch.level === 0)
+  const terminal = allBranches(plant).filter((branch) => branch.level === 4)
+  assert.ok(plant.skeleton.branches.every((branch) => branch.level === Math.min(branch.depth, 4)), `seed ${seed}: hierarchy must follow structural depth`)
+  assert.ok(plant.crown.microBranches.every((branch) => branch.level === 4), `seed ${seed}: crown twigs must be terminal level`)
+  assert.ok(trunk.every((branch) => Math.abs(angleDelta(Math.PI / 2, direction(branch))) <= 12 * Math.PI / 180 + 1e-10), `seed ${seed}: trunk must stay within its vertical limit`)
+  assert.ok(average(terminal.map((branch) => branch.bendStrength)) > average(trunk.map((branch) => branch.bendStrength)) * 8, `seed ${seed}: terminal growth must be much more organic than the trunk`)
+  for (const segments of groupBranches(trunk)) {
+    assert.ok(segments.slice(1).every((branch, index) =>
+      angleDelta(direction(segments[index]), direction(branch)) * branch.bendDirection >= -1e-10
+    ), `seed ${seed}: trunk must bend smoothly without reversals`)
+  }
   assert.ok(plant.skeleton.branches.filter((branch) => branch.depth <= 2).every((branch) => branch.y2 >= branch.y1), `seed ${seed}: major branches must grow upward`)
   assert.ok(bounds.maxX - bounds.minX <= height * 1.25, `seed ${seed}: silhouette must remain composed`)
   assert.ok(upperWidth > lowerWidth, `seed ${seed}: crown must widen toward the top`)

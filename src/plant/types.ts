@@ -1,4 +1,5 @@
 export type PlantPhase = 0 | 1 | 2 | 3
+export type BranchLevel = 0 | 1 | 2 | 3 | 4
 
 export type PlantConfig = {
   phase: PlantPhase
@@ -11,12 +12,20 @@ export type PlantConfig = {
 }
 
 export type BranchSegment = {
+  id: number
+  parentId: number | null
+  branchId: number
+  branchProgress: number
   x1: number
   y1: number
   x2: number
   y2: number
   width: number
   depth: number
+  level: BranchLevel
+  baseDirection: number
+  bendStrength: number
+  bendDirection: -1 | 1
   depthVisual: number
   visibility: number
   tone: number
@@ -38,6 +47,7 @@ export type FoliageAnchor = {
   angle: number
   terminal: boolean
   depth: number
+  level: BranchLevel
   depthVisual: number
   visibility: number
 }
