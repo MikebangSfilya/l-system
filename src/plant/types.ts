@@ -1,5 +1,8 @@
+export type PlantPhase = 0 | 1 | 2 | 3
+
 export type PlantConfig = {
-  growth: number
+  phase: PlantPhase
+  phaseProgress: number
   branching: number
   density: number
   curvature: number
@@ -32,6 +35,7 @@ export type FoliageAnchor = {
   y: number
   angle: number
   terminal: boolean
+  visibility: number
 }
 
 export type FoliageCluster = {

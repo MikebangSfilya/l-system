@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import { PlantCanvas } from './PlantCanvas.tsx'
-import type { PlantConfig } from './plant/types.ts'
+import type { PlantConfig, PlantPhase } from './plant/types.ts'
 
 const initialConfig: PlantConfig = {
-  growth: 0.62,
+  phase: 3,
+  phaseProgress: 1,
   branching: 0.48,
   density: 0.71,
   curvature: 0.22,
@@ -11,23 +12,40 @@ const initialConfig: PlantConfig = {
   seed: 12345,
 }
 
-const sliders: Array<Exclude<keyof PlantConfig, 'seed'>> = [
-  'growth',
+const sliders: Array<Exclude<keyof PlantConfig, 'phase' | 'seed'>> = [
+  'phaseProgress',
   'branching',
   'density',
   'curvature',
   'vitality',
 ]
-const growthPresets = [0.1, 0.25, 0.5, 0.75, 1]
+const phases: Array<[PlantPhase, string]> = [[0, 'Seedling'], [1, 'Structure'], [2, 'Canopy'], [3, 'Mature']]
+const phasePresets: Array<[PlantPhase, number]> = [
+  [0, 0], [0, 0.5], [0, 1], [1, 0.5], [1, 1], [2, 0.5], [2, 1], [3, 0.5], [3, 1],
+]
 
 export default function App() {
   const [config, setConfig] = useState(initialConfig)
-  const update = (key: keyof PlantConfig, value: number) => setConfig((current) => ({ ...current, [key]: value }))
+  const update = <Key extends keyof PlantConfig>(key: Key, value: PlantConfig[Key]) =>
+    setConfig((current) => ({ ...current, [key]: value }))
 
   return (
     <main>
       <section className="controls">
         <h1>Procedural plant</h1>
+        <div className="phase-buttons" aria-label="Plant phase">
+          {phases.map(([phase, label]) => (
+            <button
+              type="button"
+              aria-pressed={config.phase === phase}
+              onClick={() => update('phase', phase)}
+              key={phase}
+            >
+              P{phase} {label}
+            </button>
+          ))}
+        </div>
+
         {sliders.map((key) => (
           <label key={key}>
             <span>{key}</span>
@@ -43,15 +61,15 @@ export default function App() {
           </label>
         ))}
 
-        <div className="growth-presets" aria-label="Growth stage presets">
-          {growthPresets.map((growth) => (
+        <div className="phase-buttons" aria-label="Phase progress presets">
+          {phasePresets.map(([phase, progress]) => (
             <button
               type="button"
-              aria-pressed={config.growth === growth}
-              onClick={() => update('growth', growth)}
-              key={growth}
+              aria-pressed={config.phase === phase && config.phaseProgress === progress}
+              onClick={() => setConfig((current) => ({ ...current, phase, phaseProgress: progress }))}
+              key={`${phase}-${progress}`}
             >
-              {growth * 100}%
+              P{phase} {progress * 100}%
             </button>
           ))}
         </div>

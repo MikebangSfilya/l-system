@@ -1,9 +1,9 @@
 import LSystem from 'lindenmayer'
-import type { BranchSegment, FoliageCluster, PlantConfig, PlantSkeleton } from './types.ts'
+import type { BranchSegment, FoliageCluster, PlantConfig, PlantPhase, PlantSkeleton } from './types.ts'
 
 const ITERATIONS = 6
 
-const clamp = (value: number, min = 0, max = 1) => Math.min(max, Math.max(min, value))
+const clamp = (value: number, min = 0, max = 1) => Number.isFinite(value) ? Math.min(max, Math.max(min, value)) : min
 
 function random(seed: number) {
   let state = Math.trunc(seed) >>> 0
@@ -20,7 +20,7 @@ function makeWord(config: PlantConfig) {
   const next = random(config.seed ^ 0x9e3779b9)
   const branching = clamp(config.branching)
   const branchChance = 0.06 + branching * 0.88
-  const twigChance = branching * (0.1 + clamp(config.density) * 0.06)
+  const twigChance = branching * 0.16
 
   const system = new LSystem({
     axiom: 'X',
@@ -47,13 +47,22 @@ type Turtle = {
   depth: number
   age: number
   parent: number | null
+  densityThreshold: number
 }
 type RawSegment = Omit<BranchSegment, 'visibility'> & {
   id: number
   parent: number | null
   rank: number
-  duration: number
+  densityThreshold: number
 }
+
+const PHASE_SCHEDULE = [
+  [-0.06, 0.94, 0.08],
+  [0.94, 0.82, 0.24],
+  [2, 0.58, 0.22],
+  [2.18, 0.62, 0.22],
+  [3, 0.45, 0.22],
+] as const
 
 const verticalDifference = (angle: number) => Math.atan2(Math.sin(angle - Math.PI / 2), Math.cos(angle - Math.PI / 2))
 
@@ -66,7 +75,8 @@ function shapeAngle(angle: number, depth: number) {
 export function generateSkeleton(input: PlantConfig): PlantSkeleton {
   const config = {
     ...input,
-    growth: clamp(input.growth),
+    phase: Math.trunc(clamp(input.phase, 0, 3)) as PlantPhase,
+    phaseProgress: clamp(input.phaseProgress),
     branching: clamp(input.branching),
     density: clamp(input.density),
     curvature: clamp(input.curvature),
@@ -74,6 +84,7 @@ export function generateSkeleton(input: PlantConfig): PlantSkeleton {
   }
   const word = makeWord(config)
   const next = random(config.seed ^ 0x85ebca6b)
+  const detailNext = random(config.seed ^ 0x165667b1)
   const lean = (random(config.seed ^ 0x27d4eb2f)() - 0.5) * 10 * Math.PI / 180
   const turn = (28 + config.branching * 28) * (Math.PI / 180)
   const turtle: Turtle = {
@@ -84,10 +95,10 @@ export function generateSkeleton(input: PlantConfig): PlantSkeleton {
     depth: 0,
     age: 0,
     parent: null,
+    densityThreshold: 0,
   }
   const stack: Turtle[] = []
   const raw: RawSegment[] = []
-  let maxRank = 0
 
   for (const symbol of word) {
     if (symbol === 'F') {
@@ -110,7 +121,6 @@ export function generateSkeleton(input: PlantConfig): PlantSkeleton {
       const rank = turtle.age
       const id = raw.length
       turtle.path += 1
-      maxRank = Math.max(maxRank, rank)
       raw.push({
         id,
         parent: turtle.parent,
@@ -120,7 +130,7 @@ export function generateSkeleton(input: PlantConfig): PlantSkeleton {
         y2: y,
         rank,
         depth: turtle.depth,
-        duration,
+        densityThreshold: turtle.densityThreshold,
         width: Math.max(0.16, 2.8 * Math.max(0.45, 1 - turtle.path * 0.004) * 0.58 ** turtle.depth),
         tone: next(),
       })
@@ -134,33 +144,50 @@ export function generateSkeleton(input: PlantConfig): PlantSkeleton {
     } else if (symbol === '[') {
       stack.push({ ...turtle })
       turtle.depth += 1
+      if (turtle.depth >= 2) turtle.densityThreshold = Math.max(turtle.densityThreshold, detailNext())
       turtle.age += 0.006 + turtle.depth * 0.004
     } else if (symbol === ']') {
       Object.assign(turtle, stack.pop()!)
     }
   }
 
-  const growthScale = 0.45 + 0.55 * config.growth ** 0.65
-  const progress = config.growth ** 1.35 * maxRank
-  const maxDepth = Math.min(ITERATIONS, Math.floor(config.growth * 5))
+  const stage = config.phase + config.phaseProgress
+  const lifeProgress = stage / 4
+  const growthScale = 0.3 + 0.7 * lifeProgress ** 0.65
+  const thickness = 0.55 + 0.45 * lifeProgress ** 0.8
+  const rankRanges = new Map<number, { min: number; max: number }>()
+  for (const segment of raw) {
+    const range = rankRanges.get(segment.depth)
+    rankRanges.set(segment.depth, range
+      ? { min: Math.min(range.min, segment.rank), max: Math.max(range.max, segment.rank) }
+      : { min: segment.rank, max: segment.rank })
+  }
   const branchesWithIds = raw.map((segment) => ({
     ...segment,
-    visibility: segment.depth <= maxDepth
-      ? clamp((progress - segment.rank + segment.duration) / segment.duration)
-      : 0,
+    width: segment.width * thickness,
+    visibility: (() => {
+      if (segment.depth >= 2 && segment.densityThreshold > 0.25 + config.density * 0.75) return 0
+      const range = rankRanges.get(segment.depth)!
+      const order = range.max === range.min ? 0 : (segment.rank - range.min) / (range.max - range.min)
+      const [start, spread, duration] = PHASE_SCHEDULE[segment.depth] ?? [3.15, 0.62, 0.2]
+      return clamp((stage - start - order * spread) / duration)
+    })(),
   }))
-  const visible = branchesWithIds.filter((segment) => segment.visibility > 0)
-  const parentsWithVisibleChildren = new Set(visible.flatMap((segment) =>
+  const parentsWithChildren = new Set(branchesWithIds.flatMap((segment) =>
     segment.parent === null ? [] : [segment.parent]
   ))
-  const visibleById = new Map(visible.map((segment) => [segment.id, segment]))
+  const branchesById = new Map(branchesWithIds.map((segment) => [segment.id, segment]))
+  const parentsWithSameDepthChildren = new Set(branchesWithIds.flatMap((segment) => {
+    const parent = segment.parent === null ? undefined : branchesById.get(segment.parent)
+    return parent?.depth === segment.depth ? [parent.id] : []
+  }))
   const anchorSegments = new Map<number, { terminal: boolean }>()
 
-  for (const segment of visible) {
-    if (segment.visibility < 1 || segment.depth === 0 || parentsWithVisibleChildren.has(segment.id)) continue
-    anchorSegments.set(segment.id, { terminal: true })
-    const parent = segment.parent === null ? undefined : visibleById.get(segment.parent)
-    if (parent && parent.visibility === 1 && parent.depth > 0 && !anchorSegments.has(parent.id)) {
+  for (const segment of branchesWithIds) {
+    if (segment.depth === 0 || parentsWithSameDepthChildren.has(segment.id)) continue
+    anchorSegments.set(segment.id, { terminal: !parentsWithChildren.has(segment.id) })
+    const parent = segment.parent === null ? undefined : branchesById.get(segment.parent)
+    if (parent && parent.depth > 0 && !anchorSegments.has(parent.id)) {
       anchorSegments.set(parent.id, { terminal: false })
     }
   }
@@ -168,16 +195,17 @@ export function generateSkeleton(input: PlantConfig): PlantSkeleton {
   const foliageAnchors = [...anchorSegments]
     .sort(([left], [right]) => left - right)
     .map(([id, { terminal }]) => {
-      const segment = visibleById.get(id)!
+      const segment = branchesById.get(id)!
       return {
         id,
         x: segment.x2,
         y: segment.y2,
         angle: Math.atan2(segment.y2 - segment.y1, segment.x2 - segment.x1),
         terminal,
+        visibility: segment.visibility,
       }
     })
-  const branches = branchesWithIds.map(({ id: _id, parent: _parent, rank: _rank, duration: _duration, ...segment }) => segment)
+  const branches = branchesWithIds.map(({ id: _id, parent: _parent, rank: _rank, densityThreshold: _densityThreshold, ...segment }) => segment)
 
   return { root: { x: 0, y: 0 }, branches, foliageAnchors, growthScale }
 }
@@ -185,15 +213,17 @@ export function generateSkeleton(input: PlantConfig): PlantSkeleton {
 export function generateFoliage(skeleton: PlantSkeleton, input: PlantConfig): FoliageCluster[] {
   const density = clamp(input.density)
   const vitality = clamp(input.vitality)
-  const growth = clamp((clamp(input.growth) - 0.15) / 0.7)
-  const maturity = growth * growth * (3 - 2 * growth)
+  const phase = Math.trunc(clamp(input.phase, 0, 3))
+  const progress = clamp(input.phaseProgress)
+  const smoothProgress = progress * progress * (3 - 2 * progress)
+  const maturity = phase < 2 ? 0 : phase === 2 ? smoothProgress * 0.55 : 0.55 + smoothProgress * 0.45
   if (density === 0 || maturity === 0) return []
 
-  const next = random(input.seed ^ 0xc2b2ae35)
   const clusters: FoliageCluster[] = []
 
   for (const anchor of skeleton.foliageAnchors) {
-    const chance = density * maturity * (0.25 + 0.75 * vitality) * (anchor.terminal ? 1 : 0.55)
+    const next = random(input.seed ^ 0xc2b2ae35 ^ Math.imul(anchor.id + 1, 0x27d4eb2d))
+    const chance = density * maturity * anchor.visibility * (0.25 + 0.75 * vitality) * (anchor.terminal ? 1 : 0.55)
     if (next() >= chance) continue
 
     const count = 3 + Math.floor(next() * 2 + density * 2 + vitality * 2 + maturity * 2)

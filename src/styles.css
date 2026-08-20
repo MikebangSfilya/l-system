@@ -31,9 +31,9 @@ input[type='range'] { width: 100%; accent-color: #19c7ff; }
 input[type='number'] { width: 100%; padding: 6px 8px; color: inherit; background: #03111e; border: 1px solid #1b4b68; }
 output { text-align: right; font-variant-numeric: tabular-nums; }
 button { width: 100%; padding: 8px; color: inherit; cursor: pointer; background: #0a2940; border: 1px solid #1d5777; border-radius: 4px; }
-.growth-presets { display: flex; gap: 6px; margin: 4px 0 18px; }
-.growth-presets button { width: auto; flex: 1; padding: 6px 2px; }
-.growth-presets button[aria-pressed='true'] { color: white; background: #087cab; border-color: #1bcaff; }
+.phase-buttons { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 18px; }
+.phase-buttons button { width: auto; flex: 1 0 52px; padding: 6px 2px; }
+.phase-buttons button[aria-pressed='true'] { color: white; background: #087cab; border-color: #1bcaff; }
 pre { overflow: auto; padding: 12px; background: #03111e; font-size: 12px; }
 canvas { display: block; width: 100%; height: auto; border: 1px solid #0c3550; border-radius: 8px; box-shadow: 0 0 30px rgba(0, 183, 255, 0.12); }
 
