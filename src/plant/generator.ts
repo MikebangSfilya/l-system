@@ -1,4 +1,20 @@
-import type { BranchLevel, BranchSegment, PlantConfig, PlantCrown, PlantPhase, PlantSkeleton } from './types.ts'
+import type {
+  Bounds,
+  BranchLevel,
+  BranchSegment,
+  FoliageAnchor,
+  GrowthCheckpointV1,
+  GrowthScene,
+  LegacyPlantConfig,
+  PersistentId,
+  PlantAppearance,
+  PlantChunk,
+  PlantConfig,
+  PlantCrown,
+  PlantMorphology,
+  PlantPhase,
+  PlantSkeleton,
+} from './types.ts'
 
 const TRUNK_SEGMENTS = 24
 const ATTRACTION_POINTS = 240
@@ -47,6 +63,17 @@ function random(seed: number) {
   }
 }
 
+function hashKey(seed: number, key: string) {
+  let hash = seed >>> 0
+  for (let index = 0; index < key.length; index += 1) {
+    hash ^= key.charCodeAt(index)
+    hash = Math.imul(hash, 0x01000193)
+  }
+  return hash >>> 0
+}
+
+const priorityOf = (seed: number, key: string) => random(hashKey(seed, key))()
+
 function normalized(x: number, y: number, fallbackX = 0, fallbackY = 1) {
   const length = Math.hypot(x, y)
   return length > Number.EPSILON ? { x: x / length, y: y / length } : { x: fallbackX, y: fallbackY }
@@ -62,7 +89,8 @@ type CrownShape = {
 
 type Attractor = { x: number; y: number; alive: boolean }
 
-type RawSegment = Omit<BranchSegment, 'visibility' | 'width'> & {
+type RawSegment = Omit<BranchSegment,
+  'visibility' | 'width' | 'persistentId' | 'parentPersistentId' | 'branchPersistentId' | 'priority' | 'growthDuration'> & {
   rank: number
   densityThreshold: number
   birthProgress: number
@@ -93,25 +121,6 @@ type Bud = {
   outward: -1 | 0 | 1
 }
 
-type MatureBud = {
-  x: number
-  y: number
-  angle: number
-  bendVelocity: number
-  parentId: number
-  branchId: number
-  branchProgress: number
-  baseDirection: number
-  depth: number
-  level: BranchLevel
-  depthVisual: number
-  tone: number
-  densityThreshold: number
-  outward: -1 | 0 | 1
-  role: 'trunk' | 'edge' | 'branch'
-  life: number
-  lengthScale: number
-}
 
 function crownShape(seed: number, height: number): CrownShape {
   const next = random(seed ^ 0x243f6a88)
@@ -208,12 +217,11 @@ function makeBud(
   }
 }
 
-function normalizeConfig(input: PlantConfig): PlantConfig {
+function normalizeConfig(input: LegacyPlantConfig): LegacyPlantConfig {
   return {
     ...input,
     phase: Math.trunc(clamp(input.phase, 0, 3)) as PlantPhase,
     phaseProgress: clamp(input.phaseProgress),
-    ageEpoch: Math.max(0, Math.trunc(Number.isFinite(input.ageEpoch) ? input.ageEpoch : 0)),
     branching: clamp(input.branching),
     density: clamp(input.density),
     curvature: clamp(input.curvature),
@@ -221,7 +229,7 @@ function normalizeConfig(input: PlantConfig): PlantConfig {
   }
 }
 
-function growBlueprint(config: PlantConfig) {
+function growBlueprint(config: LegacyPlantConfig) {
   const raw: RawSegment[] = []
   const trunkNext = random(config.seed ^ 0x6a09e667)
   const lean = (trunkNext() - 0.5) * radians(10)
@@ -476,193 +484,6 @@ function matureGrowthRate(epoch: number) {
   return MATURE_GROWTH_FLOOR + (1 - MATURE_GROWTH_FLOOR) * Math.exp(-MATURE_GROWTH_DECAY * epoch)
 }
 
-function initialMatureFrontier(raw: RawSegment[], branching: number): MatureBud[] {
-  const lastByBranch = new Map<number, RawSegment>()
-  for (const segment of raw) {
-    const previous = lastByBranch.get(segment.branchId)
-    if (!previous || segment.branchProgress > previous.branchProgress) lastByBranch.set(segment.branchId, segment)
-  }
-
-  const trunk = lastByBranch.get(0)!
-  const primaryTips = [...lastByBranch.values()].filter((segment) => segment.depth === 1)
-  const sideTip = (outward: -1 | 1) => primaryTips
-    .filter((segment) => Math.sign(Math.cos(segment.baseDirection)) === outward)
-    .reduce<RawSegment | undefined>((best, segment) => !best || segment.id > best.id ? segment : best, undefined)
-  const left = sideTip(-1)
-  const right = sideTip(1)
-
-  const make = (segment: RawSegment, role: MatureBud['role'], outward: MatureBud['outward']): MatureBud => ({
-    x: segment.x2,
-    y: segment.y2,
-    angle: Math.atan2(segment.y2 - segment.y1, segment.x2 - segment.x1),
-    bendVelocity: 0,
-    parentId: segment.id,
-    branchId: segment.branchId,
-    branchProgress: segment.branchProgress,
-    baseDirection: segment.baseDirection,
-    depth: segment.depth,
-    level: segment.level,
-    depthVisual: segment.depthVisual,
-    tone: segment.tone,
-    densityThreshold: 0,
-    outward,
-    role,
-    life: role === 'trunk' ? -1 : 10 + Math.round(branching * 8),
-    lengthScale: 1,
-  })
-
-  const frontier = [make(trunk, 'trunk', 0)]
-  if (left) frontier.push(make(left, 'edge', -1))
-  if (right && right.id !== left?.id) frontier.push(make(right, 'edge', 1))
-  return frontier
-}
-
-function extendMatureBud(
-  raw: RawSegment[],
-  config: PlantConfig,
-  bud: MatureBud,
-  epoch: number,
-  growth: number,
-  macroLean: number,
-  birthProgress: number,
-) {
-  const next = random(
-    config.seed ^ 0x4cf5ad43 ^ Math.imul(epoch + 1, 0x9e3779b1) ^ Math.imul(bud.branchId + 1, 0x85ebca6b),
-  )
-  const targetAngle = bud.role === 'trunk'
-    ? Math.PI / 2 + macroLean + Math.sin(epoch * 0.11 + config.seed) * config.curvature * 0.08
-    : bud.role === 'edge'
-      ? radians(bud.outward === 1 ? 60 : 120)
-      : bud.baseDirection + angleDelta(bud.baseDirection, Math.PI / 2) * 0.22
-  const bendVelocity = bud.bendVelocity * 0.72 + (next() * 2 - 1) * config.curvature * (
-    bud.role === 'trunk' ? 0.018 : bud.role === 'edge' ? 0.055 : 0.095
-  )
-  const turnLimit = bud.role === 'trunk' ? radians(4) : bud.role === 'edge' ? radians(9) : radians(15)
-  let angle = bud.angle + clamp(
-    angleDelta(bud.angle, targetAngle) * 0.18 + bendVelocity,
-    -turnLimit,
-    turnLimit,
-  )
-  if (bud.role === 'trunk') {
-    angle = Math.PI / 2 + clamp(angleDelta(Math.PI / 2, angle), -radians(12), radians(12))
-  } else {
-    const direction = normalized(Math.cos(angle), Math.max(0.18, Math.sin(angle)))
-    angle = Math.atan2(direction.y, bud.outward * Math.max(0.12, Math.abs(direction.x)))
-  }
-
-  const baseLength = bud.role === 'trunk' ? 1.05 : bud.role === 'edge' ? 0.78 : 0.62
-  const length = baseLength * growth * bud.lengthScale * (0.88 + next() * 0.24)
-  const nextX = bud.x + Math.cos(angle) * length
-  const nextY = bud.y + Math.sin(angle) * length
-  const id = raw.length
-  raw.push({
-    id,
-    parentId: bud.parentId,
-    branchId: bud.branchId,
-    branchProgress: bud.branchProgress + 1,
-    x1: bud.x,
-    y1: bud.y,
-    x2: nextX,
-    y2: nextY,
-    rank: 4 + epoch + birthProgress,
-    densityThreshold: bud.densityThreshold,
-    depth: bud.depth,
-    level: bud.level,
-    baseDirection: bud.baseDirection,
-    bendStrength: Math.abs(angleDelta(bud.baseDirection, angle)),
-    bendDirection: angleDelta(bud.baseDirection, angle) < 0 ? -1 : 1,
-    depthVisual: bud.depthVisual,
-    tone: bud.tone,
-    birthEpoch: epoch,
-    birthProgress,
-  })
-  return {
-    ...bud,
-    x: nextX,
-    y: nextY,
-    angle,
-    bendVelocity,
-    parentId: id,
-    branchProgress: bud.branchProgress + 1,
-    life: bud.life < 0 ? -1 : bud.life - 1,
-  }
-}
-
-function appendMatureGrowth(raw: RawSegment[], config: PlantConfig, matureAge: number) {
-  if (matureAge <= 0) return
-
-  let frontier = initialMatureFrontier(raw, config.branching)
-  let nextBranchId = Math.max(...raw.map((segment) => segment.branchId)) + 1
-  const epochCount = Math.ceil(matureAge)
-  const macroLean = (random(config.seed ^ 0x3bd39e10)() - 0.5) * radians(10)
-
-  // ponytail: epochs are rebuilt on config changes; add retained chunks only when profiling shows this loop is the bottleneck.
-  for (let epoch = 0; epoch < epochCount; epoch += 1) {
-    const growth = matureGrowthRate(epoch)
-    const continued: MatureBud[] = []
-    const spawned: MatureBud[] = []
-    const epochSize = Math.max(frontier.length, 1)
-    const epochStart = raw.length
-
-    for (const [index, bud] of frontier.entries()) {
-      if (index >= 96) break
-      const birthProgress = index / epochSize * 0.72
-      const grown = extendMatureBud(raw, config, bud, epoch, growth, macroLean, birthProgress)
-      if (grown.life !== 0) continued.push(grown)
-
-      const spawnChance = bud.role === 'trunk'
-        ? (0.04 + config.branching * 0.28) * growth
-        : bud.role === 'edge' ? config.branching * 0.08 : config.branching * 0.055
-      const spawnNext = random(
-        config.seed ^ 0x67e8a953 ^ Math.imul(epoch + 1, 0x165667b1) ^ Math.imul(bud.branchId + 1, 0x27d4eb2d),
-      )
-      const firstMatureBranch = epoch === 0 && index < Math.ceil(config.branching * 3)
-      if (
-        continued.length + spawned.length < MAX_MATURE_FRONTIER
-        && raw.length - epochStart < 96
-        && (firstMatureBranch || spawnNext() < spawnChance)
-      ) {
-        const outward = (spawnNext() < 0.5 ? -1 : 1) as -1 | 1
-        const depth = bud.role === 'trunk' ? 1 : Math.min(4, bud.depth + 1)
-        const spread = radians(18 + spawnNext() * 58)
-        const childAngle = outward === 1 ? spread : Math.PI - spread
-        const branchId = nextBranchId++
-        const childNext = random(config.seed ^ 0x7f4a7c15 ^ Math.imul(branchId + 1, 0x27d4eb2d))
-        const life = depth === 1
-          ? 16 + Math.floor(childNext() * 7 + config.branching * 6)
-          : 4 + Math.floor(childNext() * 4 + config.branching * 3)
-        const reachVariation = 0.62 + childNext() * 0.76
-        const lengthScale = depth === 1
-          ? Math.max(1, grown.y * (0.44 + config.branching * 0.38) * reachVariation
-            * (0.72 + Math.sin(childAngle) * 0.28) / (life * 0.62 * growth))
-          : bud.lengthScale * (0.38 + childNext() * 0.18)
-        const child = {
-          x: grown.x,
-          y: grown.y,
-          angle: childAngle,
-          bendVelocity: 0,
-          parentId: grown.parentId,
-          branchId,
-          branchProgress: 0,
-          baseDirection: childAngle,
-          depth,
-          level: levelOf(depth),
-          depthVisual: childNext(),
-          tone: childNext(),
-          densityThreshold: depth >= 3 ? childNext() : 0,
-          outward,
-          role: 'branch',
-          life,
-          lengthScale,
-        } satisfies MatureBud
-        const childProgress = Math.min(0.68, 0.42 + spawned.length * 0.04)
-        const grownChild = extendMatureBud(raw, config, child, epoch, growth, macroLean, childProgress)
-        if (grownChild.life !== 0) spawned.push(grownChild)
-      }
-    }
-    frontier = [...continued, ...spawned].slice(0, MAX_MATURE_FRONTIER)
-  }
-}
 
 function widthBySupport(raw: RawSegment[]) {
   const children = raw.map(() => [] as number[])
@@ -681,11 +502,10 @@ function widthBySupport(raw: RawSegment[]) {
   return widths
 }
 
-export function generateSkeleton(input: PlantConfig): PlantSkeleton {
+export function generateSkeleton(input: LegacyPlantConfig): PlantSkeleton {
   const config = normalizeConfig(input)
   const raw = growBlueprint(config)
-  const matureAge = config.phase === 3 ? config.ageEpoch + config.phaseProgress : 0
-  appendMatureGrowth(raw, config, matureAge)
+  const matureAge = config.phase === 3 ? config.phaseProgress : 0
   const baseWidths = widthBySupport(raw)
   const stage = config.phase === 3 ? 3 + clamp(matureAge) : config.phase + config.phaseProgress
   const growthScale = 0.3 + 0.7 * (stage / 4) ** 0.65
@@ -699,6 +519,11 @@ export function generateSkeleton(input: PlantConfig): PlantSkeleton {
 
   const branchesWithIds = raw.map((segment, index) => ({
     ...segment,
+    persistentId: `segment:${segment.id}`,
+    parentPersistentId: segment.parentId === null ? null : `segment:${segment.parentId}`,
+    branchPersistentId: `branch:${segment.branchId}`,
+    priority: priorityOf(config.seed, `segment:${segment.id}:priority`),
+    growthDuration: segment.birthEpoch < 0 ? PHASE_SCHEDULE[segment.level][2] : 0.28,
     width: (() => {
       const birth = Math.max(0, PHASE_SCHEDULE[segment.level][0])
       const age = clamp((stage - birth) / (4 - birth))
@@ -738,6 +563,7 @@ export function generateSkeleton(input: PlantConfig): PlantSkeleton {
       const child = sameAxisChildren.get(segment.id)
       return {
         id: segment.id,
+        persistentId: segment.persistentId,
         x: segment.x2,
         y: segment.y2,
         angle: Math.atan2(segment.y2 - segment.y1, segment.x2 - segment.x1),
@@ -747,20 +573,50 @@ export function generateSkeleton(input: PlantConfig): PlantSkeleton {
         level: segment.level,
         depthVisual: segment.depthVisual,
         visibility: segment.visibility,
+        priority: priorityOf(config.seed, `${segment.persistentId}:foliage`),
         birthEpoch: segment.birthEpoch,
+        birthProgress: segment.birthProgress,
+        growthDuration: segment.growthDuration,
       }
     })
   const branches = branchesWithIds.map(({
     rank: _rank,
     densityThreshold: _densityThreshold,
-    birthProgress: _birthProgress,
     ...segment
   }) => segment)
 
-  return { root: { x: 0, y: 0 }, branches, foliageAnchors, growthScale }
+  const bounds = branches.reduce((result, branch) => ({
+    minX: Math.min(result.minX, branch.x1, branch.x2),
+    minY: Math.min(result.minY, branch.y1, branch.y2),
+    maxX: Math.max(result.maxX, branch.x1, branch.x2),
+    maxY: Math.max(result.maxY, branch.y1, branch.y2),
+  }), { minX: 0, minY: 0, maxX: 0, maxY: 0 })
+  const chunk = {
+    id: 0,
+    epochStart: -3,
+    epochEnd: -1,
+    originX: 0,
+    originY: 0,
+    bounds,
+    branches,
+    microBranches: [],
+    regions: [],
+  }
+  return {
+    root: { x: 0, y: 0 },
+    branches,
+    chunks: [chunk],
+    activeChunk: null,
+    foliageAnchors,
+    growthScale,
+    time: { phase: config.phase, epoch: 0, progress: config.phaseProgress },
+    supportByBranch: new Map(),
+    activeSupportByBranch: new Map(),
+    stats: { generatedEpochs: 0, activeSegments: 0, visitedHistoricalSegments: branches.length },
+  }
 }
 
-export function generateCrown(skeleton: PlantSkeleton, input: PlantConfig): PlantCrown {
+export function generateCrown(skeleton: PlantSkeleton, input: LegacyPlantConfig): PlantCrown {
   const config = normalizeConfig(input)
   const density = config.density
   const crownDensity = smoothstep(density)
@@ -768,7 +624,7 @@ export function generateCrown(skeleton: PlantSkeleton, input: PlantConfig): Plan
   const curvature = config.curvature
   const phase = config.phase
   const progress = config.phaseProgress
-  const matureAge = phase === 3 ? config.ageEpoch + progress : 0
+  const matureAge = phase === 3 ? progress : 0
   const smoothProgress = smoothstep(progress)
   const matureProgress = smoothstep(clamp(matureAge))
   const maturity = phase < 2 ? 0 : phase === 2 ? smoothProgress * 0.45 : 0.45 + matureProgress * 0.55
@@ -808,24 +664,31 @@ export function generateCrown(skeleton: PlantSkeleton, input: PlantConfig): Plan
     const radiusX = regionScale * (anchor.birthEpoch < 0 ? 0.055 + next() * 0.038 : 0.026 + next() * 0.022) * heightScale
     const radiusY = radiusX * (0.58 + next() * 0.18)
     const depthVisual = clamp(anchor.depthVisual * 0.65 + next() * 0.35)
-    const leaves = Array.from({ length: REGION_PARTICLES }, () => {
+    const leaves = Array.from({ length: REGION_PARTICLES }, (_, leafIndex) => {
       const threshold = next()
       const direction = next() * Math.PI * 2
       const distance = Math.sqrt(next())
       return {
         threshold,
+        id: `${anchor.persistentId}:leaf:${leafIndex}`,
         x: Math.cos(direction) * distance * radiusX,
         y: Math.sin(direction) * distance * radiusY,
         angle: anchor.angle + (next() - 0.5) * 1.8,
         size: 0.42 + next() * 0.5,
+        opacity: anchor.visibility,
         vitality,
         depthVisual: clamp(depthVisual + (next() - 0.5) * 0.35),
+        priority: threshold,
+        birthEpoch: anchor.birthEpoch,
+        birthProgress: Math.min(0.9, anchor.birthProgress + 0.08 + threshold * 0.18),
+        growthDuration: 0.22,
       }
     }).filter((leaf) => leaf.threshold <= crownDensity * maturity * anchor.visibility * (0.25 + vitality * 0.75))
       .map(({ threshold: _threshold, ...leaf }) => leaf)
 
     regions.push({
       anchorId: anchor.id,
+      anchorPersistentId: anchor.persistentId,
       x: anchor.x + Math.cos(anchor.angle) * radiusX * 0.12,
       y: anchor.y + Math.sin(anchor.angle) * radiusY * 0.12,
       radiusX,
@@ -834,6 +697,7 @@ export function generateCrown(skeleton: PlantSkeleton, input: PlantConfig): Plan
       visibility: anchor.visibility * crownDensity * maturity * (0.35 + vitality * 0.65),
       tone: next(),
       vitality,
+      priority: anchor.priority,
       leaves,
     })
   }
@@ -865,8 +729,11 @@ export function generateCrown(skeleton: PlantSkeleton, input: PlantConfig): Plan
       microBranches.push(
         {
           id,
+          persistentId: `${anchor.persistentId}:twig:${twig}:0`,
           parentId: anchor.id,
+          parentPersistentId: anchor.persistentId,
           branchId,
+          branchPersistentId: `${anchor.persistentId}:twig:${twig}`,
           branchProgress: 0.5,
           x1: anchor.x,
           y1: anchor.y,
@@ -881,12 +748,18 @@ export function generateCrown(skeleton: PlantSkeleton, input: PlantConfig): Plan
           depthVisual,
           visibility: enabled * clamp((localMicroProgress - start) / 0.18),
           tone: next(),
+          priority: threshold,
           birthEpoch: anchor.birthEpoch,
+          birthProgress: Math.min(0.88, anchor.birthProgress + start),
+          growthDuration: 0.18,
         },
         {
           id: id + 1,
+          persistentId: `${anchor.persistentId}:twig:${twig}:1`,
           parentId: id,
+          parentPersistentId: `${anchor.persistentId}:twig:${twig}:0`,
           branchId,
+          branchPersistentId: `${anchor.persistentId}:twig:${twig}`,
           branchProgress: 1,
           x1: x2,
           y1: y2,
@@ -901,7 +774,10 @@ export function generateCrown(skeleton: PlantSkeleton, input: PlantConfig): Plan
           depthVisual,
           visibility: enabled * clamp((localMicroProgress - start - 0.12) / 0.2),
           tone: next(),
+          priority: threshold,
           birthEpoch: anchor.birthEpoch,
+          birthProgress: Math.min(0.94, anchor.birthProgress + start + 0.12),
+          growthDuration: 0.2,
         },
       )
     }
@@ -924,5 +800,821 @@ export function generateCrown(skeleton: PlantSkeleton, input: PlantConfig): Plan
     if (threshold <= region.visibility * (0.2 + vitality * 0.45)) ambientParticles.push(particle)
   }
 
-  return { microBranches, regions, ambientParticles }
+  return { microBranches, regions, activeMicroBranches: [], activeRegions: [], ambientParticles, density }
+}
+
+type EngineBud = {
+  x: number
+  y: number
+  angle: number
+  bendVelocity: number
+  parentId: number
+  parentPersistentId: PersistentId
+  branchId: number
+  branchPersistentId: PersistentId
+  ancestors: PersistentId[]
+  branchProgress: number
+  baseDirection: number
+  depth: number
+  level: BranchLevel
+  depthVisual: number
+  tone: number
+  outward: -1 | 0 | 1
+  role: 'trunk' | 'edge' | 'branch'
+  life: number
+  lengthScale: number
+}
+
+type ActivePlan = {
+  epoch: number
+  segments: BranchSegment[]
+  anchors: FoliageAnchor[]
+  nextFrontier: EngineBud[]
+  nextBranchId: number
+  support: Array<{ source: PersistentId; branches: PersistentId[]; birthProgress: number; growthDuration: number }>
+}
+
+const emptyBounds = (): Bounds => ({ minX: 0, minY: 0, maxX: 0, maxY: 0 })
+
+function boundsOf(branches: BranchSegment[]): Bounds {
+  return branches.reduce((bounds, branch) => ({
+    minX: Math.min(bounds.minX, branch.x1, branch.x2),
+    minY: Math.min(bounds.minY, branch.y1, branch.y2),
+    maxX: Math.max(bounds.maxX, branch.x1, branch.x2),
+    maxY: Math.max(bounds.maxY, branch.y1, branch.y2),
+  }), emptyBounds())
+}
+
+function mergeBounds(left: Bounds, right: Bounds): Bounds {
+  return {
+    minX: Math.min(left.minX, right.minX),
+    minY: Math.min(left.minY, right.minY),
+    maxX: Math.max(left.maxX, right.maxX),
+    maxY: Math.max(left.maxY, right.maxY),
+  }
+}
+
+function boundsOfRegions(regions: PlantCrown['regions']): Bounds {
+  return regions.reduce((bounds, region) => region.visibility <= 0 ? bounds : ({
+    minX: Math.min(bounds.minX, region.x - region.radiusX),
+    minY: Math.min(bounds.minY, region.y - region.radiusY),
+    maxX: Math.max(bounds.maxX, region.x + region.radiusX),
+    maxY: Math.max(bounds.maxY, region.y + region.radiusY),
+  }), emptyBounds())
+}
+
+function initialEngineFrontier(branches: BranchSegment[], branching: number): EngineBud[] {
+  const lastByBranch = new Map<number, BranchSegment>()
+  for (const segment of branches) {
+    const previous = lastByBranch.get(segment.branchId)
+    if (!previous || segment.branchProgress > previous.branchProgress) lastByBranch.set(segment.branchId, segment)
+  }
+  const trunk = lastByBranch.get(0)!
+  const primaryTips = [...lastByBranch.values()].filter((segment) => segment.depth === 1)
+  const sideTip = (outward: -1 | 1) => primaryTips
+    .filter((segment) => Math.sign(Math.cos(segment.baseDirection)) === outward)
+    .reduce<BranchSegment | undefined>((best, segment) => !best || segment.id > best.id ? segment : best, undefined)
+  const make = (segment: BranchSegment, role: EngineBud['role'], outward: EngineBud['outward']): EngineBud => ({
+    x: segment.x2,
+    y: segment.y2,
+    angle: Math.atan2(segment.y2 - segment.y1, segment.x2 - segment.x1),
+    bendVelocity: 0,
+    parentId: segment.id,
+    parentPersistentId: segment.persistentId,
+    branchId: segment.branchId,
+    branchPersistentId: segment.branchPersistentId,
+    ancestors: role === 'trunk' ? [segment.branchPersistentId] : ['branch:0', segment.branchPersistentId],
+    branchProgress: segment.branchProgress,
+    baseDirection: segment.baseDirection,
+    depth: segment.depth,
+    level: segment.level,
+    depthVisual: segment.depthVisual,
+    tone: segment.tone,
+    outward,
+    role,
+    life: role === 'trunk' ? -1 : 10 + Math.round(branching * 8),
+    lengthScale: 1,
+  })
+  const frontier = [make(trunk, 'trunk', 0)]
+  const left = sideTip(-1)
+  const right = sideTip(1)
+  if (left) frontier.push(make(left, 'edge', -1))
+  if (right && right.id !== left?.id) frontier.push(make(right, 'edge', 1))
+  return frontier
+}
+
+function segmentVisibility(progress: number, birthProgress: number, duration: number) {
+  return smoothstep(clamp((progress - birthProgress) / duration))
+}
+
+function anchorsForSegments(seed: number, segments: BranchSegment[]): FoliageAnchor[] {
+  return segments.filter((segment) => segment.depth >= 1).map((segment) => ({
+    id: segment.id,
+    persistentId: `${segment.persistentId}:anchor`,
+    x: segment.x2,
+    y: segment.y2,
+    angle: Math.atan2(segment.y2 - segment.y1, segment.x2 - segment.x1),
+    terminal: true,
+    depth: segment.depth,
+    level: segment.level,
+    depthVisual: segment.depthVisual,
+    visibility: 0,
+    priority: priorityOf(seed, `${segment.persistentId}:foliage`),
+    birthEpoch: segment.birthEpoch,
+    birthProgress: segment.birthProgress,
+    growthDuration: segment.growthDuration,
+  }))
+}
+
+function planEpoch(
+  morphology: PlantMorphology,
+  epoch: number,
+  frontier: EngineBud[],
+  firstId: number,
+  firstBranchId: number,
+): ActivePlan {
+  const growth = matureGrowthRate(epoch)
+  const macroLean = (random(morphology.seed ^ 0x3bd39e10)() - 0.5) * radians(10)
+  const segments: BranchSegment[] = []
+  const continued: EngineBud[] = []
+  const spawned: EngineBud[] = []
+  const support: ActivePlan['support'] = []
+  let nextBranchId = firstBranchId
+
+  const extend = (bud: EngineBud, birthProgress: number, duration: number) => {
+    const key = `${bud.branchPersistentId}:epoch:${epoch}`
+    const next = random(hashKey(morphology.seed, `${key}:geometry`))
+    const targetAngle = bud.role === 'trunk'
+      ? Math.PI / 2 + macroLean + Math.sin(epoch * 0.11 + morphology.seed) * morphology.curvature * 0.08
+      : bud.role === 'edge'
+        ? radians(bud.outward === 1 ? 60 : 120)
+        : bud.baseDirection + angleDelta(bud.baseDirection, Math.PI / 2) * 0.22
+    const bendVelocity = bud.bendVelocity * 0.72 + (next() * 2 - 1) * morphology.curvature * (
+      bud.role === 'trunk' ? 0.018 : bud.role === 'edge' ? 0.055 : 0.095
+    )
+    const turnLimit = bud.role === 'trunk' ? radians(4) : bud.role === 'edge' ? radians(9) : radians(15)
+    let angle = bud.angle + clamp(angleDelta(bud.angle, targetAngle) * 0.18 + bendVelocity, -turnLimit, turnLimit)
+    if (bud.role === 'trunk') {
+      angle = Math.PI / 2 + clamp(angleDelta(Math.PI / 2, angle), -radians(12), radians(12))
+    } else {
+      const direction = normalized(Math.cos(angle), Math.max(0.18, Math.sin(angle)))
+      angle = Math.atan2(direction.y, bud.outward * Math.max(0.12, Math.abs(direction.x)))
+    }
+    const baseLength = bud.role === 'trunk' ? 1.05 : bud.role === 'edge' ? 0.78 : 0.62
+    const length = baseLength * growth * bud.lengthScale * (0.88 + next() * 0.24)
+    const x2 = bud.x + Math.cos(angle) * length
+    const y2 = bud.y + Math.sin(angle) * length
+    const id = firstId + segments.length
+    const persistentId = `${key}:segment`
+    const segment: BranchSegment = {
+      id,
+      persistentId,
+      parentId: bud.parentId,
+      parentPersistentId: bud.parentPersistentId,
+      branchId: bud.branchId,
+      branchPersistentId: bud.branchPersistentId,
+      branchProgress: bud.branchProgress + 1,
+      x1: bud.x,
+      y1: bud.y,
+      x2,
+      y2,
+      width: WIDTH_MIN[bud.level],
+      depth: bud.depth,
+      level: bud.level,
+      baseDirection: bud.baseDirection,
+      bendStrength: Math.abs(angleDelta(bud.baseDirection, angle)),
+      bendDirection: angleDelta(bud.baseDirection, angle) < 0 ? -1 : 1,
+      depthVisual: bud.depthVisual,
+      visibility: 0,
+      tone: bud.tone,
+      priority: priorityOf(morphology.seed, `${persistentId}:priority`),
+      birthEpoch: epoch,
+      birthProgress,
+      growthDuration: duration,
+    }
+    segments.push(segment)
+    return {
+      ...bud,
+      x: x2,
+      y: y2,
+      angle,
+      bendVelocity,
+      parentId: id,
+      parentPersistentId: persistentId,
+      branchProgress: bud.branchProgress + 1,
+      life: bud.life < 0 ? -1 : bud.life - 1,
+    }
+  }
+
+  for (const bud of frontier) {
+    const schedule = random(hashKey(morphology.seed, `${bud.branchPersistentId}:epoch:${epoch}:schedule`))
+    const birthProgress = schedule() * 0.32
+    const duration = 0.34 + schedule() * 0.22
+    const grown = extend(bud, birthProgress, duration)
+    if (grown.life !== 0) continued.push(grown)
+
+    const spawnChance = bud.role === 'trunk'
+      ? (0.04 + morphology.branching * 0.28) * growth
+      : bud.role === 'edge' ? morphology.branching * 0.08 : morphology.branching * 0.055
+    const spawnNext = random(hashKey(morphology.seed, `${bud.branchPersistentId}:epoch:${epoch}:spawn`))
+    const firstMatureBranch = epoch === 0 && priorityOf(morphology.seed, bud.branchPersistentId) < morphology.branching
+    if (continued.length + spawned.length >= MAX_MATURE_FRONTIER || (!firstMatureBranch && spawnNext() >= spawnChance)) continue
+
+    const outward = (spawnNext() < 0.5 ? -1 : 1) as -1 | 1
+    const depth = bud.role === 'trunk' ? 1 : Math.min(4, bud.depth + 1)
+    const spread = radians(18 + spawnNext() * 58)
+    const childAngle = outward === 1 ? spread : Math.PI - spread
+    const branchId = nextBranchId++
+    const branchPersistentId = `${bud.branchPersistentId}:child:${epoch}`
+    const childNext = random(hashKey(morphology.seed, `${branchPersistentId}:traits`))
+    const life = depth === 1
+      ? 16 + Math.floor(childNext() * 7 + morphology.branching * 6)
+      : 4 + Math.floor(childNext() * 4 + morphology.branching * 3)
+    const reachVariation = 0.62 + childNext() * 0.76
+    const lengthScale = depth === 1
+      ? Math.max(1, grown.y * (0.44 + morphology.branching * 0.38) * reachVariation
+        * (0.72 + Math.sin(childAngle) * 0.28) / (life * 0.62 * growth))
+      : bud.lengthScale * (0.38 + childNext() * 0.18)
+    const child: EngineBud = {
+      x: grown.x,
+      y: grown.y,
+      angle: childAngle,
+      bendVelocity: 0,
+      parentId: grown.parentId,
+      parentPersistentId: grown.parentPersistentId,
+      branchId,
+      branchPersistentId,
+      ancestors: [...bud.ancestors, branchPersistentId],
+      branchProgress: 0,
+      baseDirection: childAngle,
+      depth,
+      level: levelOf(depth),
+      depthVisual: childNext(),
+      tone: childNext(),
+      outward,
+      role: 'branch',
+      life,
+      lengthScale,
+    }
+    const childBirth = Math.min(0.78, birthProgress + duration * (0.62 + schedule() * 0.12))
+    const childDuration = Math.max(0.16, 1 - childBirth)
+    const grownChild = extend(child, childBirth, childDuration)
+    if (grownChild.life !== 0) spawned.push(grownChild)
+    support.push({ source: branchPersistentId, branches: bud.ancestors, birthProgress: childBirth, growthDuration: childDuration })
+  }
+
+  return {
+    epoch,
+    segments,
+    anchors: anchorsForSegments(morphology.seed, segments),
+    nextFrontier: [...continued, ...spawned].slice(0, MAX_MATURE_FRONTIER),
+    nextBranchId,
+    support,
+  }
+}
+
+function makeIncrementalCrown(
+  morphology: PlantMorphology,
+  appearance: PlantAppearance,
+  anchors: FoliageAnchor[],
+  firstMicroId: number,
+): PlantCrown {
+  const regions: PlantCrown['regions'] = []
+  const microBranches: BranchSegment[] = []
+  for (const anchor of anchors) {
+    if (anchor.priority > (anchor.depth === 1 ? 0.18 : 0.1)) continue
+    const next = random(hashKey(morphology.seed, `${anchor.persistentId}:crown`))
+    const radiusX = Math.max(0.3, Math.abs(anchor.y) * (0.018 + next() * 0.018))
+    const radiusY = radiusX * (0.58 + next() * 0.18)
+    const depthVisual = clamp(anchor.depthVisual * 0.65 + next() * 0.35)
+    const leaves = Array.from({ length: REGION_PARTICLES }, (_, index) => {
+      const priority = next()
+      const direction = next() * Math.PI * 2
+      const distance = Math.sqrt(next())
+      return {
+        id: `${anchor.persistentId}:leaf:${index}`,
+        x: Math.cos(direction) * distance * radiusX,
+        y: Math.sin(direction) * distance * radiusY,
+        angle: anchor.angle + (next() - 0.5) * 1.8,
+        size: 0.42 + next() * 0.5,
+        opacity: 0,
+        vitality: appearance.vitality,
+        depthVisual: clamp(depthVisual + (next() - 0.5) * 0.35),
+        priority,
+        birthEpoch: anchor.birthEpoch,
+        birthProgress: Math.min(0.92, anchor.birthProgress + 0.05 + priority * 0.16),
+        growthDuration: Math.max(0.08, 1 - Math.min(0.92, anchor.birthProgress + 0.05 + priority * 0.16)),
+      }
+    })
+    regions.push({
+      anchorId: anchor.id,
+      anchorPersistentId: anchor.persistentId,
+      x: anchor.x + Math.cos(anchor.angle) * radiusX * 0.12,
+      y: anchor.y + Math.sin(anchor.angle) * radiusY * 0.12,
+      radiusX,
+      radiusY,
+      depthVisual,
+      visibility: 0,
+      tone: next(),
+      vitality: appearance.vitality,
+      priority: anchor.priority,
+      leaves,
+    })
+    for (let twig = 0; twig < 2; twig += 1) {
+      const branchPersistentId = `${anchor.persistentId}:twig:${twig}`
+      const angle = anchor.angle + (next() - 0.5) * (0.8 + morphology.curvature * 0.55)
+      const length = 0.35 + next() * 0.28
+      const birthProgress = Math.min(0.9, anchor.birthProgress + 0.08 + next() * 0.2)
+      microBranches.push({
+        id: firstMicroId + microBranches.length,
+        persistentId: `${branchPersistentId}:segment`,
+        parentId: anchor.id,
+        parentPersistentId: anchor.persistentId,
+        branchId: firstMicroId + microBranches.length,
+        branchPersistentId,
+        branchProgress: 1,
+        x1: anchor.x,
+        y1: anchor.y,
+        x2: anchor.x + Math.cos(angle) * length,
+        y2: anchor.y + Math.sin(angle) * length,
+        width: 0.1,
+        depth: anchor.depth + 1,
+        level: 4,
+        baseDirection: angle,
+        bendStrength: morphology.curvature * 0.15,
+        bendDirection: next() < 0.5 ? -1 : 1,
+        depthVisual,
+        visibility: 0,
+        tone: next(),
+        priority: next(),
+        birthEpoch: anchor.birthEpoch,
+        birthProgress,
+        growthDuration: Math.max(0.1, 1 - birthProgress),
+      })
+    }
+  }
+  return {
+    microBranches,
+    regions,
+    activeMicroBranches: [],
+    activeRegions: [],
+    ambientParticles: [],
+    density: appearance.density,
+  }
+}
+
+export class TreeGrowthEngine {
+  readonly morphology: PlantMorphology
+  private appearance: PlantAppearance
+  private time = { phase: 0 as PlantPhase, epoch: 0, progress: 0 }
+  private completed: BranchSegment[]
+  private chunks: PlantChunk[]
+  private frontier: EngineBud[]
+  private active: ActivePlan | null = null
+  private nextId: number
+  private nextBranchId: number
+  private completedBounds: Bounds
+  private completedCrownBounds: Bounds
+  private support = new Map<PersistentId, number>()
+  private activeSupport = new Map<PersistentId, number>()
+  private crown: PlantCrown
+  private activeCrown: PlantCrown = {
+    microBranches: [],
+    regions: [],
+    activeMicroBranches: [],
+    activeRegions: [],
+    ambientParticles: [],
+    density: 1,
+  }
+  private presentCrown: PlantCrown
+
+  constructor(config: PlantConfig) {
+    this.morphology = {
+      seed: Math.trunc(Number.isFinite(config.seed) ? config.seed : 0),
+      branching: clamp(config.branching),
+      curvature: clamp(config.curvature),
+    }
+    this.appearance = { density: clamp(config.density), vitality: clamp(config.vitality) }
+    const baseConfig = this.legacy(2, 1)
+    const base = generateSkeleton(baseConfig)
+    this.completed = base.branches
+    this.completedBounds = boundsOf(this.completed)
+    this.chunks = [{
+      id: 0,
+      epochStart: -3,
+      epochEnd: -1,
+      originX: 0,
+      originY: 0,
+      bounds: this.completedBounds,
+      branches: [...this.completed],
+      microBranches: [],
+      regions: [],
+    }]
+    this.frontier = initialEngineFrontier(this.completed, this.morphology.branching)
+    this.nextId = Math.max(...this.completed.map(({ id }) => id)) + 1
+    this.nextBranchId = Math.max(...this.completed.map(({ branchId }) => branchId)) + 1
+    this.crown = generateCrown(base, { ...baseConfig, phase: 3, phaseProgress: 1 })
+    this.completedCrownBounds = boundsOfRegions(this.crown.regions)
+    this.chunks[0].microBranches = this.crown.microBranches
+    this.chunks[0].regions = this.crown.regions
+    this.chunks[0].bounds = mergeBounds(this.chunks[0].bounds, boundsOfRegions(this.crown.regions))
+    this.presentCrown = this.crown
+  }
+
+  private legacy(phase: PlantPhase, phaseProgress: number): LegacyPlantConfig {
+    return { ...this.morphology, ...this.appearance, phase, phaseProgress }
+  }
+
+  private ensureActive() {
+    if (this.active || this.time.phase < 3) return
+    this.active = planEpoch(this.morphology, this.time.epoch, this.frontier, this.nextId, this.nextBranchId)
+    this.activeCrown = makeIncrementalCrown(this.morphology, this.appearance, this.active.anchors, this.nextId + this.active.segments.length)
+    this.presentCrown = {
+      microBranches: this.crown.microBranches,
+      regions: this.crown.regions,
+      activeMicroBranches: this.activeCrown.microBranches,
+      activeRegions: this.activeCrown.regions,
+      ambientParticles: [],
+      density: this.appearance.density,
+    }
+    this.updateActive(this.time.progress)
+  }
+
+  private replanActive() {
+    if (!this.active || this.time.phase < 3) return
+    const previous = this.active
+    const replanned = planEpoch(this.morphology, this.time.epoch, this.frontier, this.nextId, this.nextBranchId)
+    const previousSegments = new Map(previous.segments.map((segment) => [segment.persistentId, segment]))
+    const replannedIds = new Set(replanned.segments.map(({ persistentId }) => persistentId))
+    const frozenBranches = new Set<PersistentId>()
+    const segments = replanned.segments.map((segment) => {
+      const old = previousSegments.get(segment.persistentId)
+      if (old?.visibility === 1) {
+        frozenBranches.add(old.branchPersistentId)
+        return old
+      }
+      if (!old) {
+        segment.birthProgress = Math.max(segment.birthProgress, this.time.progress)
+        segment.growthDuration = Math.max(0.08, 1 - segment.birthProgress)
+      }
+      return segment
+    })
+    for (const old of previous.segments) {
+      if (!replannedIds.has(old.persistentId) && old.visibility > 0) {
+        segments.push(old)
+        frozenBranches.add(old.branchPersistentId)
+      }
+    }
+
+    const previousBranchIds = new Map(previous.segments.map((segment) => [segment.branchPersistentId, segment.branchId]))
+    const frontierBranchIds = new Map(this.frontier.map((bud) => [bud.branchPersistentId, bud.branchId]))
+    const usedBranchIds = new Set([...previousBranchIds.values(), ...frontierBranchIds.values()])
+    const branchIds = new Map<PersistentId, number>()
+    let branchId = this.nextBranchId
+    for (const segment of segments) {
+      let stableId = branchIds.get(segment.branchPersistentId)
+        ?? previousBranchIds.get(segment.branchPersistentId)
+        ?? frontierBranchIds.get(segment.branchPersistentId)
+      if (stableId === undefined) {
+        while (usedBranchIds.has(branchId)) branchId += 1
+        stableId = branchId++
+        usedBranchIds.add(stableId)
+      }
+      branchIds.set(segment.branchPersistentId, stableId)
+      segment.branchId = stableId
+    }
+
+    const activeIds = new Map<PersistentId, number>()
+    segments.forEach((segment, index) => {
+      segment.id = this.nextId + index
+      activeIds.set(segment.persistentId, segment.id)
+    })
+    for (const segment of segments) {
+      const parentId = segment.parentPersistentId === null ? undefined : activeIds.get(segment.parentPersistentId)
+      if (parentId !== undefined) segment.parentId = parentId
+    }
+
+    const previousNext = new Map(previous.nextFrontier.map((bud) => [bud.branchPersistentId, bud]))
+    const nextFrontier = replanned.nextFrontier.map((bud) => frozenBranches.has(bud.branchPersistentId)
+      ? previousNext.get(bud.branchPersistentId) ?? bud
+      : bud)
+    const nextBranches = new Set(nextFrontier.map((bud) => bud.branchPersistentId))
+    for (const bud of previous.nextFrontier) {
+      if (frozenBranches.has(bud.branchPersistentId) && !nextBranches.has(bud.branchPersistentId)) nextFrontier.push(bud)
+    }
+    for (const bud of nextFrontier) {
+      bud.branchId = branchIds.get(bud.branchPersistentId) ?? bud.branchId
+      const parentId = activeIds.get(bud.parentPersistentId)
+      if (parentId !== undefined) bud.parentId = parentId
+    }
+
+    const previousSupport = new Map(previous.support.map((addition) => [addition.source, addition]))
+    const support = replanned.support.map((addition) => previousSupport.has(addition.source) ? addition : {
+      ...addition,
+      birthProgress: Math.max(addition.birthProgress, this.time.progress),
+      growthDuration: Math.max(0.08, 1 - Math.max(addition.birthProgress, this.time.progress)),
+    })
+    const supportSources = new Set(support.map(({ source }) => source))
+    for (const addition of previous.support) {
+      const segment = previous.segments.find(({ branchPersistentId }) => branchPersistentId === addition.source)
+      if (!supportSources.has(addition.source) && segment && segment.visibility > 0) support.push(addition)
+    }
+
+    this.active = {
+      epoch: replanned.epoch,
+      segments,
+      anchors: anchorsForSegments(this.morphology.seed, segments),
+      nextFrontier,
+      nextBranchId: Math.max(previous.nextBranchId, replanned.nextBranchId, branchId),
+      support,
+    }
+    const previousCrown = this.activeCrown
+    const nextCrown = makeIncrementalCrown(this.morphology, this.appearance, this.active.anchors, this.nextId + segments.length)
+    const previousRegions = new Map(previousCrown.regions.map((region) => [region.anchorPersistentId, region]))
+    nextCrown.regions = nextCrown.regions.map((region) => {
+      const old = previousRegions.get(region.anchorPersistentId)
+      return old?.visibility === 1 ? old : region
+    })
+    const previousMicro = new Map(previousCrown.microBranches.map((branch) => [branch.persistentId, branch]))
+    nextCrown.microBranches = nextCrown.microBranches.map((branch) => {
+      const old = previousMicro.get(branch.persistentId)
+      return old?.visibility === 1 ? old : branch
+    })
+    this.activeCrown = nextCrown
+    this.presentCrown = {
+      microBranches: this.crown.microBranches,
+      regions: this.crown.regions,
+      activeMicroBranches: nextCrown.microBranches,
+      activeRegions: nextCrown.regions,
+      ambientParticles: [],
+      density: this.appearance.density,
+    }
+    this.updateActive(this.time.progress)
+  }
+
+  private updateActive(progress: number) {
+    if (!this.active) return
+    this.activeSupport.clear()
+    for (const segment of this.active.segments) {
+      segment.visibility = segmentVisibility(progress, segment.birthProgress, segment.growthDuration)
+    }
+    for (const anchor of this.active.anchors) {
+      anchor.visibility = segmentVisibility(progress, anchor.birthProgress, anchor.growthDuration)
+    }
+    for (const addition of this.active.support) {
+      const visible = segmentVisibility(progress, addition.birthProgress, addition.growthDuration)
+      for (const branch of addition.branches) {
+        this.activeSupport.set(branch, (this.activeSupport.get(branch) ?? 0) + visible)
+      }
+    }
+    for (const branch of this.activeCrown.microBranches) {
+      branch.visibility = segmentVisibility(progress, branch.birthProgress, branch.growthDuration)
+    }
+    for (const region of this.activeCrown.regions) {
+      const anchor = this.active.anchors.find(({ persistentId }) => persistentId === region.anchorPersistentId)
+      region.visibility = anchor?.visibility ?? 0
+      region.vitality = this.appearance.vitality
+      for (const leaf of region.leaves) {
+        leaf.opacity = segmentVisibility(progress, leaf.birthProgress, leaf.growthDuration)
+        leaf.vitality = this.appearance.vitality
+      }
+    }
+  }
+
+  private commitActive() {
+    if (!this.active) return
+    this.updateActive(1)
+    this.completed.push(...this.active.segments)
+    this.completedBounds = mergeBounds(this.completedBounds, boundsOf(this.active.segments))
+    const group = Math.floor(this.active.epoch / 32)
+    let chunk = this.chunks.at(-1)
+    if (!chunk || chunk.id !== group + 1) {
+      chunk = {
+        id: group + 1,
+        epochStart: this.active.epoch,
+        epochEnd: this.active.epoch,
+        originX: this.active.segments[0]?.x1 ?? 0,
+        originY: this.active.segments[0]?.y1 ?? 0,
+        bounds: boundsOf(this.active.segments),
+        branches: [],
+        microBranches: [],
+        regions: [],
+      }
+      this.chunks.push(chunk)
+    }
+    chunk.branches.push(...this.active.segments)
+    chunk.microBranches.push(...this.activeCrown.microBranches)
+    chunk.regions.push(...this.activeCrown.regions)
+    chunk.epochEnd = this.active.epoch
+    chunk.bounds = mergeBounds(mergeBounds(chunk.bounds, boundsOf(this.active.segments)), boundsOfRegions(this.activeCrown.regions))
+    for (const addition of this.active.support) {
+      for (const branch of addition.branches) this.support.set(branch, (this.support.get(branch) ?? 0) + 1)
+    }
+    this.crown.microBranches.push(...this.activeCrown.microBranches)
+    this.crown.regions.push(...this.activeCrown.regions)
+    this.completedCrownBounds = mergeBounds(this.completedCrownBounds, boundsOfRegions(this.activeCrown.regions))
+    this.frontier = this.active.nextFrontier
+    this.nextId += this.active.segments.length
+    this.nextBranchId = this.active.nextBranchId
+    this.active = null
+    this.activeCrown = {
+      microBranches: [], regions: [], activeMicroBranches: [], activeRegions: [], ambientParticles: [], density: this.appearance.density,
+    }
+    this.presentCrown = this.crown
+  }
+
+  setAppearance(appearance: PlantAppearance) {
+    const next = { density: clamp(appearance.density), vitality: clamp(appearance.vitality) }
+    if (next.density === this.appearance.density && next.vitality === this.appearance.vitality) return this.scene()
+    this.appearance = next
+    for (const region of [...this.crown.regions, ...this.activeCrown.regions]) {
+      region.vitality = this.appearance.vitality
+      for (const leaf of region.leaves) leaf.vitality = this.appearance.vitality
+    }
+    this.crown.density = this.appearance.density
+    this.presentCrown.density = this.appearance.density
+    return this.scene()
+  }
+
+  setMorphology(morphology: Pick<PlantMorphology, 'branching' | 'curvature'>) {
+    const branching = clamp(morphology.branching)
+    const curvature = clamp(morphology.curvature)
+    if (branching === this.morphology.branching && curvature === this.morphology.curvature) return this.scene()
+    this.morphology.branching = branching
+    this.morphology.curvature = curvature
+    if (this.time.phase === 3) {
+      this.ensureActive()
+      this.replanActive()
+    }
+    return this.scene()
+  }
+
+  setProgress(value: number) {
+    const progress = clamp(value)
+    if (progress < this.time.progress) return this.scene()
+    this.time.progress = progress
+    if (this.time.phase === 3) {
+      this.ensureActive()
+      this.updateActive(progress)
+    }
+    if (progress < 1) return this.scene()
+
+    if (this.time.phase < 3) {
+      this.time.phase = (this.time.phase + 1) as PlantPhase
+    }
+    else {
+      this.commitActive()
+      this.time.epoch += 1
+    }
+    this.time.progress = 0
+    this.ensureActive()
+    return this.scene()
+  }
+
+  previewProgress(value: number) {
+    const progress = clamp(value)
+    if (progress < this.time.progress) return this.scene()
+    this.time.progress = progress
+    if (this.time.phase === 3) {
+      this.ensureActive()
+      this.updateActive(progress)
+    }
+    return this.scene()
+  }
+
+  setTotalGrowth(totalGrowth: number) {
+    const target = Math.max(0, Number.isFinite(totalGrowth) ? totalGrowth : 0)
+    const currentUnits = this.time.phase < 3 ? this.time.phase : 3 + this.time.epoch
+    if (target < currentUnits + this.time.progress) return this.scene()
+    const targetUnits = Math.floor(target)
+    while ((this.time.phase < 3 ? this.time.phase : 3 + this.time.epoch) < targetUnits) this.setProgress(1)
+    return this.setProgress(target - targetUnits)
+  }
+
+  scene(): GrowthScene {
+    if (this.time.phase < 3) {
+      const skeleton = generateSkeleton(this.legacy(this.time.phase, this.time.progress))
+      const crown = generateCrown(skeleton, this.legacy(this.time.phase, this.time.progress))
+      const branches = [...skeleton.branches, ...crown.microBranches].filter(({ visibility }) => visibility > 0)
+      return { skeleton, crown, bounds: boundsOf(branches) }
+    }
+    this.ensureActive()
+    const activeBranches = this.active?.segments ?? []
+    const activeVisible = [...activeBranches, ...this.activeCrown.microBranches]
+      .filter(({ visibility }) => visibility > 0).map((branch) => ({
+      ...branch,
+      x2: branch.x1 + (branch.x2 - branch.x1) * branch.visibility,
+      y2: branch.y1 + (branch.y2 - branch.y1) * branch.visibility,
+    }))
+    const activeRegions = this.activeCrown.regions.filter(({ visibility }) => visibility > 0)
+    const activeBounds = mergeBounds(boundsOf(activeVisible), boundsOfRegions(activeRegions))
+    const activeChunk: PlantChunk | null = this.active ? {
+      id: -1,
+      epochStart: this.time.epoch,
+      epochEnd: this.time.epoch,
+      originX: this.active.segments[0]?.x1 ?? 0,
+      originY: this.active.segments[0]?.y1 ?? 0,
+      bounds: activeBounds,
+      branches: activeBranches,
+      microBranches: this.activeCrown.microBranches,
+      regions: this.activeCrown.regions,
+    } : null
+    const maturity = this.time.epoch === 0 ? 0.45 + smoothstep(this.time.progress) * 0.55 : 1
+    if (this.time.epoch === 0) {
+      for (const region of this.crown.regions) {
+        region.visibility = maturity
+        for (const leaf of region.leaves) leaf.opacity = leaf.priority <= maturity ? maturity : 0
+      }
+    }
+    const skeleton: PlantSkeleton = {
+      root: { x: 0, y: 0 },
+      branches: this.completed,
+      chunks: this.chunks,
+      activeChunk,
+      foliageAnchors: [...(this.active?.anchors ?? [])],
+      growthScale: 0.3 + 0.7 * ((3 + clamp(this.time.epoch + this.time.progress)) / 4) ** 0.65,
+      time: { ...this.time },
+      supportByBranch: this.support,
+      activeSupportByBranch: this.activeSupport,
+      stats: { generatedEpochs: 0, activeSegments: activeBranches.length, visitedHistoricalSegments: 0 },
+    }
+    return {
+      skeleton,
+      crown: this.presentCrown,
+      bounds: mergeBounds(
+        mergeBounds(this.completedBounds, activeBounds),
+        mergeBounds(this.completedCrownBounds, boundsOfRegions(activeRegions)),
+      ),
+    }
+  }
+
+  createCheckpoint(): GrowthCheckpointV1 {
+    return {
+      version: 1,
+      morphology: { ...this.morphology },
+      appearance: { ...this.appearance },
+      time: { ...this.time },
+      completed: this.completed.map((segment) => ({ ...segment })),
+      frontier: structuredClone(this.frontier),
+      nextId: this.nextId,
+      nextBranchId: this.nextBranchId,
+      support: [...this.support],
+      crown: structuredClone(this.crown),
+    }
+  }
+
+  static restore(checkpoint: GrowthCheckpointV1) {
+    if (checkpoint.version !== 1) throw new Error(`Unsupported growth checkpoint version: ${String(checkpoint.version)}`)
+    const engine = new TreeGrowthEngine({ ...checkpoint.morphology, ...checkpoint.appearance, progress: 0 })
+    engine.time = { ...checkpoint.time }
+    engine.completed = checkpoint.completed.map((segment) => ({ ...segment }))
+    engine.frontier = structuredClone(checkpoint.frontier) as EngineBud[]
+    engine.nextId = checkpoint.nextId
+    engine.nextBranchId = checkpoint.nextBranchId
+    engine.support = new Map(checkpoint.support)
+    engine.crown = structuredClone(checkpoint.crown)
+    engine.presentCrown = engine.crown
+    engine.completedBounds = boundsOf(engine.completed)
+    engine.completedCrownBounds = boundsOfRegions(engine.crown.regions)
+    const baseRegions = engine.crown.regions.filter((region) => region.leaves[0]?.birthEpoch < 0)
+    engine.chunks = [{
+      id: 0,
+      epochStart: -3,
+      epochEnd: -1,
+      originX: 0,
+      originY: 0,
+      bounds: mergeBounds(boundsOf(engine.completed.filter(({ birthEpoch }) => birthEpoch < 0)), boundsOfRegions(baseRegions)),
+      branches: engine.completed.filter(({ birthEpoch }) => birthEpoch < 0),
+      microBranches: engine.crown.microBranches.filter(({ birthEpoch }) => birthEpoch < 0),
+      regions: baseRegions,
+    }]
+    for (let start = 0; start < engine.time.epoch; start += 32) {
+      const branches = engine.completed.filter(({ birthEpoch }) => birthEpoch >= start && birthEpoch < start + 32)
+      if (branches.length > 0) {
+        const regions = engine.crown.regions.filter((region) => {
+          const epoch = region.leaves[0]?.birthEpoch ?? -1
+          return epoch >= start && epoch < start + 32
+        })
+        engine.chunks.push({
+          id: Math.floor(start / 32) + 1,
+          epochStart: start,
+          epochEnd: Math.min(engine.time.epoch - 1, start + 31),
+          originX: branches[0].x1,
+          originY: branches[0].y1,
+          bounds: mergeBounds(boundsOf(branches), boundsOfRegions(regions)),
+          branches,
+          microBranches: engine.crown.microBranches.filter(({ birthEpoch }) => birthEpoch >= start && birthEpoch < start + 32),
+          regions,
+        })
+      }
+    }
+    engine.active = null
+    engine.activeCrown = {
+      microBranches: [], regions: [], activeMicroBranches: [], activeRegions: [], ambientParticles: [], density: engine.appearance.density,
+    }
+    engine.presentCrown = engine.crown
+    engine.ensureActive()
+    engine.updateActive(engine.time.progress)
+    return engine
+  }
 }

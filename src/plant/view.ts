@@ -21,20 +21,20 @@ export function computeBounds(segments: BranchSegment[], regions: CrownRegion[] 
 export function computeViewTransform(
   bounds: Bounds,
   root: PlantSkeleton['root'],
-  canvasSize: { width: number; height: number },
+  viewportSize: { width: number; height: number },
   padding: number,
 ): ViewTransform {
-  const paddingX = canvasSize.width * padding
-  const paddingY = canvasSize.height * padding
+  const paddingX = viewportSize.width * padding
+  const paddingY = viewportSize.height * padding
   const horizontalExtent = Math.max(root.x - bounds.minX, bounds.maxX - root.x, Number.EPSILON)
   const height = Math.max(bounds.maxY - root.y, Number.EPSILON)
 
   return {
-    rootX: canvasSize.width / 2,
-    rootY: canvasSize.height - paddingY,
+    rootX: viewportSize.width / 2,
+    rootY: viewportSize.height - paddingY,
     scale: Math.min(
-      (canvasSize.width - paddingX * 2) / (horizontalExtent * 2),
-      (canvasSize.height - paddingY * 2) / height,
+      (viewportSize.width - paddingX * 2) / (horizontalExtent * 2),
+      (viewportSize.height - paddingY * 2) / height,
     ),
   }
 }

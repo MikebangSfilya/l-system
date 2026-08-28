@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "check": "node --experimental-strip-types scripts/check.ts",
+    "benchmark:growth": "node --experimental-strip-types scripts/benchmark.ts",
     "preview": "vite preview"
   },
   "dependencies": {

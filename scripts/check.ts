@@ -1,367 +1,314 @@
-import { strict as assert } from 'node:assert'
-import { generateCrown, generateSkeleton } from '../src/plant/generator.ts'
-import type { BranchLevel, BranchSegment, PlantConfig, PlantPhase } from '../src/plant/types.ts'
-import { computeBounds, computeViewTransform } from '../src/plant/view.ts'
+import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { TreeGrowthEngine } from '../src/plant/generator.ts'
+import { effectiveBranchWidth, selectRenderableBranches } from '../src/plant/renderer.ts'
+import type { BranchSegment, GrowthScene, PlantConfig, PlantSkeleton, ViewTransform } from '../src/plant/types.ts'
 
-const AMBIENT_LIMIT = 18
 const config: PlantConfig = {
-  phase: 3,
-  phaseProgress: 1,
-  ageEpoch: 0,
-  branching: 0.6,
-  density: 0.7,
-  curvature: 0.3,
-  vitality: 0.9,
-  seed: 12345,
-}
-
-const generate = (plantConfig: PlantConfig) => {
-  const skeleton = generateSkeleton(plantConfig)
-  const crown = generateCrown(skeleton, plantConfig)
-  const bounds = computeBounds([...skeleton.branches, ...crown.microBranches], crown.regions)
-  return {
-    skeleton,
-    crown,
-    bounds,
-    transform: computeViewTransform(bounds, skeleton.root, { width: 640, height: 640 }, 0.12),
-  }
-}
-const visible = (plant: ReturnType<typeof generate>) => plant.skeleton.branches.filter((branch) => branch.visibility > 0)
-const visibleMicro = (plant: ReturnType<typeof generate>) => plant.crown.microBranches.filter((branch) => branch.visibility > 0)
-const activeRegions = (plant: ReturnType<typeof generate>) => plant.crown.regions.filter((region) => region.visibility > 0)
-const leafCount = (plant: ReturnType<typeof generate>) =>
-  plant.crown.regions.reduce((total, region) => total + region.leaves.length, 0)
-const allBranches = (plant: ReturnType<typeof generate>) => [...plant.skeleton.branches, ...plant.crown.microBranches]
-const average = (values: number[]) => values.reduce((total, value) => total + value, 0) / values.length
-const averageWidth = (plant: ReturnType<typeof generate>, level: BranchLevel) =>
-  average(plant.skeleton.branches.filter((branch) => branch.level === level).map((branch) => branch.width))
-const topology = (plant: ReturnType<typeof generate>) => allBranches(plant)
-  .map(({ id, parentId, branchId, depth, level }) => ({ id, parentId, branchId, depth, level }))
-const blueprint = (plant: ReturnType<typeof generate>) => ({
-  branches: plant.skeleton.branches.map(({ visibility: _visibility, width: _width, ...branch }) => branch),
-  anchors: plant.skeleton.foliageAnchors.map(({ visibility: _visibility, ...anchor }) => anchor),
-  microBranches: plant.crown.microBranches.map(({ visibility: _visibility, width: _width, ...branch }) => branch),
-  regions: plant.crown.regions.map(({ visibility: _visibility, vitality: _vitality, leaves: _leaves, ...region }) => region),
-})
-const geometry = (plant: ReturnType<typeof generate>) => plant.skeleton.branches
-  .map(({ visibility: _visibility, width: _width, ...branch }) => branch)
-const baseBlueprint = (plant: ReturnType<typeof generate>) => {
-  return plant.skeleton.branches
-    .filter(({ birthEpoch }) => birthEpoch < 0)
-    .map(({ visibility: _visibility, width: _width, ...branch }) => branch)
-}
-const groupBranches = (branches: BranchSegment[]) => {
-  const groups = new Map<number, BranchSegment[]>()
-  for (const branch of branches) groups.set(branch.branchId, [...(groups.get(branch.branchId) ?? []), branch])
-  return [...groups.values()].map((segments) => segments.sort((left, right) => left.branchProgress - right.branchProgress))
-}
-const direction = (branch: BranchSegment) => Math.atan2(branch.y2 - branch.y1, branch.x2 - branch.x1)
-const angleDelta = (left: number, right: number) => Math.atan2(Math.sin(right - left), Math.cos(right - left))
-const degrees = (angle: number) => Math.abs(angle) * 180 / Math.PI
-const branchLength = (branch: BranchSegment) => Math.hypot(branch.x2 - branch.x1, branch.y2 - branch.y1)
-const grownLength = (plant: ReturnType<typeof generate>, minimumDepth = 0) => plant.skeleton.branches
-  .filter((branch) => branch.depth >= minimumDepth)
-  .reduce((total, branch) => total + branchLength(branch) * branch.visibility, 0)
-const visibleWidth = (plant: ReturnType<typeof generate>) => {
-  const points = visible(plant).flatMap((branch) => [
-    branch.x1,
-    branch.x1 + (branch.x2 - branch.x1) * branch.visibility,
-  ])
-  return Math.max(...points) - Math.min(...points)
-}
-const span = (values: number[]) => Math.max(...values) - Math.min(...values)
-
-const mature = generate(config)
-assert.deepEqual(mature, generate(config), 'same config must be deterministic')
-assert.deepEqual(mature, generate(JSON.parse(JSON.stringify(config)) as PlantConfig), 'JSON config must preserve generation')
-assert.deepEqual(mature, generate({ ...config, phase: 99 as PlantPhase, phaseProgress: 2 }), 'lifecycle inputs must clamp')
-assert.deepEqual(mature, generate({ ...config, ageEpoch: -4.8 }), 'negative mature age must clamp to zero')
-assert.notDeepEqual(blueprint(mature), blueprint(generate({ ...config, seed: 54321 })), 'seed must change the blueprint')
-
-const phasePlants = ([0, 1, 2, 3] as PlantPhase[]).map((phase) =>
-  [0, 0.25, 0.5, 0.75, 1].map((phaseProgress) => generate({ ...config, phase, phaseProgress })))
-for (const plants of phasePlants) {
-  const physicalGrowth = plants.map((plant) => grownLength(plant) * plant.skeleton.growthScale)
-  assert.ok(physicalGrowth.every((size, index) => index === 0 || size > physicalGrowth[index - 1]), 'each phase must grow monotonically')
-}
-
-const lifecycle = phasePlants.flatMap((plants, phase) => phase === 0 ? plants : plants.slice(1))
-for (const [index, plant] of lifecycle.entries()) {
-  assert.deepEqual(baseBlueprint(plant), baseBlueprint(mature), 'phase changes must preserve the base blueprint')
-  assert.deepEqual(plant.skeleton.root, mature.skeleton.root, 'phase changes must preserve the root')
-  if (index > 0) {
-    const previous = lifecycle[index - 1]
-    const previousVisibility = new Map(previous.skeleton.branches.map((branch) => [branch.id, branch.visibility]))
-    assert.ok(plant.skeleton.growthScale > previous.skeleton.growthScale, 'world growth scale must increase')
-    assert.ok(plant.skeleton.branches.every((branch) =>
-      !previousVisibility.has(branch.id) || branch.visibility >= previousVisibility.get(branch.id)!
-    ), 'visible structure must never regress')
-  }
-}
-
-for (const phase of [0, 1, 2] as PlantPhase[]) {
-  assert.deepEqual(
-    generate({ ...config, phase, phaseProgress: 1 }),
-    generate({ ...config, phase: (phase + 1) as PlantPhase, phaseProgress: 0 }),
-    `phase ${phase} boundary must remain continuous`,
-  )
-}
-
-assert.deepEqual(
-  generate({ ...config, phase: 2, phaseProgress: 1, ageEpoch: 500 }),
-  generate({ ...config, phase: 3, phaseProgress: 0, ageEpoch: 0 }),
-  'infinite growth must start exactly at the P2/P3 boundary',
-)
-assert.deepEqual(
-  generate({ ...config, phase: 1, phaseProgress: 0.5, ageEpoch: 500 }),
-  generate({ ...config, phase: 1, phaseProgress: 0.5, ageEpoch: 0 }),
-  'mature age must be ignored before P3',
-)
-const matureStart = generate({ ...config, phase: 3, phaseProgress: 0, ageEpoch: 0 })
-const matureHalf = generate({ ...config, phase: 3, phaseProgress: 0.5, ageEpoch: 0 })
-const preMatureBranchIds = new Set(matureStart.skeleton.branches.map((branch) => branch.branchId))
-assert.ok(
-  new Set(visible(matureHalf)
-    .filter((branch) => branch.birthEpoch === 0 && !preMatureBranchIds.has(branch.branchId))
-    .map((branch) => branch.branchId)).size >= 2,
-  'P3 must visibly create new branches before its first epoch ends',
-)
-for (const ageEpoch of [0, 1, 10]) {
-  assert.deepEqual(
-    generate({ ...config, ageEpoch, phaseProgress: 1 }),
-    generate({ ...config, ageEpoch: ageEpoch + 1, phaseProgress: 0 }),
-    `epoch ${ageEpoch} boundary must remain continuous`,
-  )
-}
-
-const agePlants = [0, 1, 10, 50, 100, 500].map((ageEpoch) =>
-  generate({ ...config, ageEpoch, phaseProgress: 0 }))
-for (let index = 1; index < agePlants.length; index += 1) {
-  const previous = agePlants[index - 1]
-  const current = agePlants[index]
-  assert.deepEqual(
-    geometry(current).slice(0, previous.skeleton.branches.length),
-    geometry(previous),
-    'later epochs must preserve every previously born segment',
-  )
-  assert.ok(current.bounds.maxY >= previous.bounds.maxY, 'mature epochs must never lower the crown')
-  assert.ok(
-    current.bounds.maxX - current.bounds.minX >= previous.bounds.maxX - previous.bounds.minX,
-    'mature epochs must never narrow the crown',
-  )
-}
-const ancient = agePlants.at(-1)!
-assert.ok(ancient.bounds.maxY > agePlants[0].bounds.maxY * 3, 'long-lived trees must become substantially taller')
-assert.ok(
-  ancient.bounds.maxX - ancient.bounds.minX > (agePlants[0].bounds.maxX - agePlants[0].bounds.minX) * 3,
-  'long-lived trees must become substantially broader',
-)
-const segmentsByEpoch = new Map<number, number>()
-for (const branch of ancient.skeleton.branches.filter(({ birthEpoch }) => birthEpoch >= 0)) {
-  segmentsByEpoch.set(branch.birthEpoch, (segmentsByEpoch.get(branch.birthEpoch) ?? 0) + 1)
-}
-assert.ok([...segmentsByEpoch.values()].every((count) => count <= 96), 'each epoch must have a bounded structural budget')
-assert.equal(segmentsByEpoch.size, 500, 'every requested mature epoch must contribute geometry')
-const trunkGrowthAt = (epoch: number) => ancient.skeleton.branches
-  .filter((branch) => branch.birthEpoch === epoch && branch.branchId === 0)
-  .reduce((total, branch) => total + branchLength(branch), 0)
-assert.ok(trunkGrowthAt(50) < trunkGrowthAt(0) && trunkGrowthAt(499) > 0, 'growth must decay without reaching zero')
-assert.ok(ancient.skeleton.branches.length < 10_000, '500 epochs must keep canonical structure practical')
-assert.deepEqual(
-  geometry(generate({ ...config, ageEpoch: 50, density: 0, vitality: 0 })),
-  geometry(generate({ ...config, ageEpoch: 50, density: 1, vitality: 1 })),
-  'density and vitality must not reshape mature geometry',
-)
-
-const veryOld = generate({
-  ...config,
-  ageEpoch: 1500,
-  phaseProgress: 1,
+  progress: 0,
   branching: 0.48,
   density: 0.71,
   curvature: 0.22,
   vitality: 0.91,
-  seed: 3698315778,
-})
-const veryOldAxes = groupBranches(veryOld.skeleton.branches).filter((segments) => segments[0].branchId !== 0)
-assert.ok(Math.max(...veryOldAxes.map((segments) => segments.length)) < 64, 'side leaders must expire instead of becoming infinite rays')
-assert.ok(
-  (veryOld.bounds.maxX - veryOld.bounds.minX) / (veryOld.bounds.maxY - veryOld.bounds.minY) > 0.35,
-  'very old trees must retain a readable crown instead of collapsing into a needle',
-)
-
-const [seedling, structure, canopy, adult] = phasePlants.map((plants) => plants.at(-1)!)
-assert.ok(visible(seedling).every((branch) => branch.depth === 0), 'seedling must remain trunk-only')
-assert.equal(Math.max(...visible(structure).map((branch) => branch.depth)), 1, 'structure phase must contain only macro axes')
-assert.ok(visibleWidth(structure) >= visibleWidth(adult) * 0.9, 'primary axes must define the mature silhouette')
-assert.ok(visible(canopy).some((branch) => branch.depth >= 2), 'canopy must add secondary and tertiary structure')
-assert.ok(leafCount(canopy) > 0 && leafCount(adult) > leafCount(canopy) * 1.8, 'maturity must substantially fill the crown')
-assert.equal(visibleMicro(canopy).length, 0, 'terminal twigs must wait for maturity')
-assert.ok(visibleMicro(adult).length > 0, 'maturity must reveal terminal twigs')
-assert.ok([seedling, structure].every((plant) => leafCount(plant) === 0), 'early phases must remain leafless')
-assert.deepEqual(
-  adult.skeleton.branches.filter((branch) => branch.birthEpoch < 0 && branch.depth <= 2).map(({ visibility }) => visibility),
-  canopy.skeleton.branches.filter((branch) => branch.birthEpoch < 0 && branch.depth <= 2).map(({ visibility }) => visibility),
-  'maturity must preserve major branches',
-)
-assert.ok(
-  phasePlants[3].map(leafCount).every((count, index, counts) => index === 0 || count > counts[index - 1]),
-  'foliage must keep filling throughout maturity',
-)
-assert.ok(
-  phasePlants[3].map(visibleMicro).map(({ length }) => length)
-    .every((count, index, counts) => index === 0 || count >= counts[index - 1]),
-  'terminal growth must never regress',
-)
-
-assert.ok(averageWidth(adult, 0) > averageWidth(adult, 1) * 2, 'trunk must be thicker than primary branches')
-assert.ok(averageWidth(adult, 1) > averageWidth(adult, 2) * 1.5, 'primary branches must taper into secondary branches')
-assert.ok(averageWidth(adult, 2) > averageWidth(adult, 3) * 1.35, 'secondary branches must taper into fine structure')
-assert.ok(averageWidth(adult, 0) > averageWidth(phasePlants[3][0], 0) * 1.1, 'maturity must thicken the trunk')
-assert.ok(averageWidth(adult, 1) > averageWidth(phasePlants[3][0], 1) * 1.1, 'maturity must thicken primary branches')
-
-const narrow = generate({ ...config, branching: 0 })
-const branched = generate({ ...config, branching: 1 })
-assert.ok(branched.skeleton.branches.length > narrow.skeleton.branches.length * 3, 'branching must increase structural complexity')
-assert.equal(new Set(narrow.skeleton.branches.filter((branch) => branch.birthEpoch < 0 && branch.depth === 1).map((branch) => branch.branchId)).size, 3)
-assert.equal(new Set(branched.skeleton.branches.filter((branch) => branch.birthEpoch < 0 && branch.depth === 1).map((branch) => branch.branchId)).size, 7)
-assert.ok(visibleWidth(branched) > visibleWidth(narrow) * 1.3, 'branching must broaden the macro structure')
-
-const earlySparse = generate({ ...config, phase: 1, phaseProgress: 1, density: 0 })
-const earlyDense = generate({ ...config, phase: 1, phaseProgress: 1, density: 1 })
-assert.deepEqual(earlySparse.skeleton, earlyDense.skeleton, 'density must not alter early structure')
-const sparse = generate({ ...config, density: 0 })
-const dense = generate({ ...config, density: 1 })
-assert.deepEqual(blueprint(sparse), blueprint(dense), 'density must fill rather than reshape the canonical tree')
-assert.equal(leafCount(sparse), 0, 'zero density must remove foliage')
-assert.equal(visibleMicro(sparse).length, 0, 'zero density must remove terminal twigs')
-assert.equal(sparse.crown.ambientParticles.length, 0, 'zero density must not fake a crown with ambient noise')
-assert.ok(visible(dense).length > visible(sparse).length && leafCount(dense) > 0, 'density must reveal fine structure and foliage')
-const densityPlants = [0, 0.25, 0.5, 0.75, 1].map((density) => generate({ ...config, density }))
-for (const metric of [
-  (plant: ReturnType<typeof generate>) => visible(plant).filter((branch) => branch.depth >= 3).length,
-  (plant: ReturnType<typeof generate>) => visibleMicro(plant).length,
-  leafCount,
-]) {
-  assert.ok(
-    densityPlants.map(metric).every((count, index, counts) => index === 0 || count > counts[index - 1]),
-    'density sweep must strongly and monotonically add fine detail',
-  )
+  seed: 12345,
 }
-assert.ok(leafCount(densityPlants.at(-1)!) > leafCount(densityPlants[1]) * 5, 'density range must be visually significant')
 
-const locallyDense = generate({ ...config, branching: 0.2, density: 1 })
-const structurallyComplex = generate({ ...config, branching: 1, density: 0.2 })
-assert.ok(visible(structurallyComplex).length > visible(locallyDense).length * 1.8, 'branching must control architecture')
-assert.ok(leafCount(locallyDense) > leafCount(structurallyComplex) * 4, 'density must independently control crown fill')
-assert.ok(visibleMicro(locallyDense).length >= visibleMicro(structurallyComplex).length * 2, 'density must independently control terminal twigs')
+assert.doesNotMatch(
+  readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8'),
+  /set[A-Z]\w*\(\(current\)\s*=>\s*\([^)]*event\.currentTarget/,
+  'React event values must be copied before entering a state updater',
+)
 
-const curvatureConfig = { ...config, seed: 2572587950, branching: 1, density: 1 }
-const curvatureSweep = [0, 0.25, 0.5, 0.75, 1].map((curvature) => generate({ ...curvatureConfig, curvature }))
-assert.ok(curvatureSweep.every((plant) => JSON.stringify(topology(plant)) === JSON.stringify(topology(curvatureSweep[0]))), 'curvature must preserve topology')
-const curvatureDeviation = curvatureSweep.map((plant) => average(plant.skeleton.branches.map((branch, index) =>
-  Math.hypot(branch.x2 - curvatureSweep[0].skeleton.branches[index].x2, branch.y2 - curvatureSweep[0].skeleton.branches[index].y2))))
-assert.ok(curvatureDeviation.every((value, index) => index === 0 || value > curvatureDeviation[index - 1]), 'curvature must progressively reshape branch paths')
-assert.ok(curvatureDeviation.at(-1)! > 1, 'maximum curvature must create a clearly different silhouette')
-
-const curved = curvatureSweep.at(-1)!
-for (const segments of groupBranches(curved.skeleton.branches)) {
-  for (let index = 1; index < segments.length; index += 1) {
-    assert.ok(segments[index].branchProgress > segments[index - 1].branchProgress, 'branch progress must advance')
-    const turn = degrees(angleDelta(direction(segments[index - 1]), direction(segments[index])))
-    assert.ok(turn <= (segments[0].level === 1 ? 10 : 19), 'correlated curvature must stay smooth')
-  }
-}
-assert.ok(curved.skeleton.branches.filter((branch) => branch.depth === 0).every((branch) =>
-  degrees(angleDelta(Math.PI / 2, direction(branch))) <= 10 + 1e-9
-), 'trunk must stay close to vertical')
-
-const skeletonIds = new Set(mature.skeleton.branches.map((branch) => branch.id))
-const allIds = new Set(allBranches(mature).map((branch) => branch.id))
-assert.equal(allIds.size, allBranches(mature).length, 'every segment must have a unique id')
-assert.ok(mature.skeleton.branches.every((branch) => branch.parentId === null || skeletonIds.has(branch.parentId)), 'structural parents must exist')
-assert.ok(mature.crown.microBranches.every((branch) => branch.parentId !== null && allIds.has(branch.parentId)), 'micro-branch parents must exist')
-const anchorIds = new Set(mature.skeleton.foliageAnchors.map((anchor) => anchor.id))
-assert.ok(mature.crown.regions.every((region) => anchorIds.has(region.anchorId)), 'crown regions must remain attached to the tree')
-assert.ok(mature.crown.regions.length <= 72, 'crown region count must stay bounded')
-assert.ok(mature.crown.regions.every((region) => region.leaves.every((leaf) =>
-  (leaf.x / region.radiusX) ** 2 + (leaf.y / region.radiusY) ** 2 <= 1 + Number.EPSILON
-)), 'structural particles must stay inside crown regions')
-const eligibleTerminalCount = mature.skeleton.foliageAnchors.filter((anchor) => anchor.terminal && anchor.depth >= 2).length
-assert.equal(mature.crown.microBranches.length, eligibleTerminalCount * 6, 'terminal microstructure must stay linearly bounded')
-assert.ok(mature.crown.ambientParticles.length <= AMBIENT_LIMIT && mature.crown.ambientParticles.length < leafCount(mature), 'ambient particles must remain subordinate')
-
-const visualDepths = [
-  ...mature.skeleton.branches.map((branch) => branch.depthVisual),
-  ...mature.crown.microBranches.map((branch) => branch.depthVisual),
-  ...mature.crown.regions.map((region) => region.depthVisual),
-  ...mature.crown.regions.flatMap((region) => region.leaves.map((leaf) => leaf.depthVisual)),
+const branches = (scene: GrowthScene) => [
+  ...scene.skeleton.chunks.flatMap((chunk) => chunk.branches),
+  ...(scene.skeleton.activeChunk?.branches ?? []),
 ]
-assert.ok(visualDepths.every((depth) => depth >= 0 && depth <= 1), 'visual depth must stay normalized')
-assert.ok(visualDepths.some((depth) => depth < 0.2) && visualDepths.some((depth) => depth > 0.8), 'tree must contain near and far layers')
+const crownRegions = (scene: GrowthScene) => [...scene.crown.regions, ...scene.crown.activeRegions]
+const length = (branch: BranchSegment) => Math.hypot(branch.x2 - branch.x1, branch.y2 - branch.y1)
+const physicalLength = (scene: GrowthScene) => branches(scene)
+  .reduce((total, branch) => total + length(branch) * branch.visibility, 0) * scene.skeleton.growthScale
+const mass = (scene: GrowthScene) => branches(scene).reduce((total, branch) =>
+  total + length(branch) * branch.visibility * effectiveBranchWidth(branch, scene.skeleton), 0)
+const rounded = (value: number) => Math.round(value * 1e9) / 1e9
 
-const padding = 640 * 0.12
-assert.equal(mature.transform.rootX, 320, 'root must be horizontally centered')
-assert.equal(mature.transform.rootY, 640 - padding, 'root must sit one padding above the bottom')
-const screenBounds = {
-  minX: mature.transform.rootX + (mature.bounds.minX - mature.skeleton.root.x) * mature.transform.scale,
-  minY: mature.transform.rootY - (mature.bounds.maxY - mature.skeleton.root.y) * mature.transform.scale,
-  maxX: mature.transform.rootX + (mature.bounds.maxX - mature.skeleton.root.x) * mature.transform.scale,
-  maxY: mature.transform.rootY - (mature.bounds.minY - mature.skeleton.root.y) * mature.transform.scale,
+function historicalSignature(scene: GrowthScene) {
+  return branches(scene).filter(({ birthEpoch }) => birthEpoch < scene.skeleton.time.epoch).map((branch) => ({
+    id: branch.persistentId,
+    parent: branch.parentPersistentId,
+    axis: branch.branchPersistentId,
+    geometry: [branch.x1, branch.y1, branch.x2, branch.y2].map(rounded),
+    traits: [branch.baseDirection, branch.bendStrength, branch.depthVisual, branch.tone, branch.priority].map(rounded),
+  }))
 }
-assert.ok(screenBounds.minX >= padding - 1e-9 && screenBounds.maxX <= 640 - padding + 1e-9, 'tree must fit horizontal padding')
-assert.ok(screenBounds.minY >= padding - 1e-9 && screenBounds.maxY <= 640 - padding + 1e-9, 'tree must fit vertical padding')
-assert.ok(phasePlants[0][0].skeleton.growthScale < mature.skeleton.growthScale * 0.5, 'stable camera must not enlarge a seedling')
 
-const seedBlueprints = new Set<string>()
-for (const seed of [1, 2, 3, 4, 5, 2572587950, 1658534288, 904200480]) {
-  const seedConfig = { ...config, seed, branching: 1, density: 1, curvature: 1 }
-  const plant = generate(seedConfig)
-  const axes = groupBranches(plant.skeleton.branches)
-  const primary = axes.filter((segments) => segments[0].depth === 1)
-  const primaryOrigins = primary.map((segments) => segments[0].y1.toFixed(6))
-  const sides = new Set(primary.map((segments) => Math.sign(segments[0].x2 - segments[0].x1)))
-  const launchBins = new Set(primary.map((segments) => Math.round(
-    degrees(Math.asin(Math.abs(Math.sin(direction(segments[0]))))) / 10,
-  )))
-  const branchById = new Map(plant.skeleton.branches.map((branch) => [branch.id, branch]))
-  const splitBins = new Map<number, number>()
-  for (const segments of axes.filter((branch) => branch[0].depth > 1)) {
-    const parent = branchById.get(segments[0].parentId!)!
-    const bin = Math.round(degrees(angleDelta(direction(parent), direction(segments[0]))) / 10)
-    splitBins.set(bin, (splitBins.get(bin) ?? 0) + 1)
-  }
-  const dominantSplit = Math.max(...splitBins.values()) / [...splitBins.values()].reduce((total, count) => total + count, 0)
-  const height = plant.bounds.maxY - plant.bounds.minY
-  const width = plant.bounds.maxX - plant.bounds.minX
-  const upperAnchors = plant.skeleton.foliageAnchors.filter((anchor) => anchor.y >= plant.bounds.minY + height * 0.55)
-
-  assert.ok(plant.skeleton.branches.length < 1500, `seed ${seed}: structural generation must stay bounded`)
-  assert.equal(new Set(primaryOrigins).size, primary.length, `seed ${seed}: primary origins must not form paired tiers`)
-  assert.deepEqual([...sides].sort(), [-1, 1], `seed ${seed}: primary axes must occupy both sides`)
-  assert.ok(launchBins.size >= 2, `seed ${seed}: launch angles must vary`)
-  assert.ok(dominantSplit < 0.45, `seed ${seed}: no fixed split angle may dominate the tree`)
-  assert.ok(width >= height * 0.65 && width <= height * 1.25, `seed ${seed}: broadleaf silhouette must remain composed`)
-  assert.ok(span(upperAnchors.map((anchor) => anchor.x)) >= height * 0.45, `seed ${seed}: upper crown must spread horizontally`)
-  assert.ok(primary.every((segments) => segments.at(-1)!.y2 > segments[0].y1), `seed ${seed}: primary tips must finish above their origin`)
-  assert.ok(axes.filter((segments) => segments[0].depth === 2)
-    .every((segments) => segments.at(-1)!.y2 > segments[0].y1), `seed ${seed}: secondary tips must finish above their origin`)
-  assert.ok(activeRegions(plant).length > 0 && leafCount(plant) > 0 && visibleMicro(plant).length > 0, `seed ${seed}: mature crown must contain foliage and twigs`)
-
-  const structurePlant = generate({ ...seedConfig, phase: 1, phaseProgress: 1 })
-  assert.ok(visibleWidth(structurePlant) >= visibleWidth(plant) * 0.9, `seed ${seed}: primary structure must establish the silhouette`)
-  for (const phase of [0, 1, 2] as PlantPhase[]) {
-    assert.deepEqual(
-      generate({ ...seedConfig, phase, phaseProgress: 1 }),
-      generate({ ...seedConfig, phase: (phase + 1) as PlantPhase, phaseProgress: 0 }),
-      `seed ${seed}: phase ${phase} boundary must remain continuous`,
-    )
-  }
-  seedBlueprints.add(JSON.stringify(blueprint(plant)))
+function renderSignature(scene: GrowthScene) {
+  const visibleBranches = branches(scene).filter(({ visibility }) => visibility > 0).map((branch) => ({
+    id: branch.persistentId,
+    x1: rounded(branch.x1),
+    y1: rounded(branch.y1),
+    x2: rounded(branch.x1 + (branch.x2 - branch.x1) * branch.visibility),
+    y2: rounded(branch.y1 + (branch.y2 - branch.y1) * branch.visibility),
+    width: rounded(effectiveBranchWidth(branch, scene.skeleton)),
+  })).sort((left, right) => left.id.localeCompare(right.id))
+  const regions = crownRegions(scene).filter(({ visibility }) => visibility > 0).map((region) => ({
+    id: region.anchorPersistentId,
+    visibility: rounded(region.visibility),
+    leaves: region.leaves.filter((leaf) => leaf.opacity > 0 && leaf.priority <= scene.crown.density)
+      .map((leaf) => [leaf.id, rounded(leaf.size * leaf.opacity)]),
+  })).sort((left, right) => left.id.localeCompare(right.id))
+  return { visibleBranches, regions }
 }
-assert.equal(seedBlueprints.size, 8, 'different seeds must produce unique trees')
 
-console.log('plant checks passed', {
-  visibleByPhase: [seedling, structure, canopy, adult].map((plant) => visible(plant).length),
-  leavesByPhase: [seedling, structure, canopy, adult].map(leafCount),
+const deterministicA = new TreeGrowthEngine(config)
+const deterministicB = new TreeGrowthEngine(config)
+deterministicA.setTotalGrowth(17.63)
+deterministicB.setTotalGrowth(17.63)
+assert.deepEqual(renderSignature(deterministicA.scene()), renderSignature(deterministicB.scene()), 'same seed and time must be deterministic')
+
+const differentSeed = new TreeGrowthEngine({ ...config, seed: 54321 })
+differentSeed.setTotalGrowth(17.63)
+assert.notDeepEqual(historicalSignature(deterministicA.scene()), historicalSignature(differentSeed.scene()), 'seed must change stable geometry')
+
+const agedForReset = new TreeGrowthEngine(config)
+agedForReset.setTotalGrowth(42.75)
+const resetGrowth = new TreeGrowthEngine(config)
+assert.deepEqual(resetGrowth.scene().skeleton.time, { phase: 0, epoch: 0, progress: 0 }, 'explicit reset must return to zero growth time')
+assert.deepEqual(renderSignature(resetGrowth.scene()), renderSignature(new TreeGrowthEngine(config).scene()), 'explicit reset must reproduce the original seed state')
+
+const ordered = new TreeGrowthEngine(config)
+ordered.setTotalGrowth(23)
+const orderedCheckpoint = ordered.createCheckpoint()
+const reversedCheckpoint = structuredClone(orderedCheckpoint)
+reversedCheckpoint.frontier.reverse()
+const orderedContinuation = TreeGrowthEngine.restore(orderedCheckpoint)
+const reversedContinuation = TreeGrowthEngine.restore(reversedCheckpoint)
+orderedContinuation.setTotalGrowth(24)
+reversedContinuation.setTotalGrowth(24)
+const canonicalHistory = (scene: GrowthScene) => historicalSignature(scene).sort((left, right) => left.id.localeCompare(right.id))
+assert.deepEqual(
+  canonicalHistory(reversedContinuation.scene()),
+  canonicalHistory(orderedContinuation.scene()),
+  'frontier traversal order must not affect persistent geometry or random traits',
+)
+
+const lifecycle = new TreeGrowthEngine(config)
+let previousLength = 0
+let previousMass = 0
+for (const total of Array.from({ length: 41 }, (_, index) => index * 0.1)) {
+  const scene = lifecycle.setTotalGrowth(total)
+  const currentLength = physicalLength(scene)
+  const currentMass = mass(scene)
+  assert.ok(currentLength + 1e-9 >= previousLength, `visible length must not decrease at totalGrowth=${total}`)
+  assert.ok(currentMass + 1e-9 >= previousMass, `visible mass must not decrease at totalGrowth=${total}`)
+  previousLength = currentLength
+  previousMass = currentMass
+}
+
+const boundary = new TreeGrowthEngine(config)
+boundary.setTotalGrowth(8.73)
+const beforeHistory = historicalSignature(boundary.scene())
+const nearBoundary = boundary.previewProgress(0.999)
+const widthsNear = new Map(branches(nearBoundary).filter(({ visibility }) => visibility > 0)
+  .map((branch) => [branch.persistentId, effectiveBranchWidth(branch, nearBoundary.skeleton)]))
+const exactBoundary = boundary.previewProgress(1)
+const atOne = renderSignature(exactBoundary)
+const afterBoundary = boundary.setProgress(1)
+assert.deepEqual(renderSignature(afterBoundary), atOne, '(N, 1) and (N+1, 0) must have the same render state')
+assert.deepEqual(historicalSignature(afterBoundary).slice(0, beforeHistory.length), beforeHistory, 'epoch commit must preserve history')
+for (const branch of branches(afterBoundary).filter(({ visibility }) => visibility > 0)) {
+  const previous = widthsNear.get(branch.persistentId)
+  if (previous !== undefined) {
+    const width = effectiveBranchWidth(branch, afterBoundary.skeleton)
+    assert.ok(width + 1e-9 >= previous, 'width must not fall at an epoch boundary')
+    assert.ok(width - previous < 0.02, 'width must not jump at an epoch boundary')
+  }
+}
+
+const stableHistory = new TreeGrowthEngine(config)
+stableHistory.setTotalGrowth(5)
+const original = historicalSignature(stableHistory.scene())
+const originalIds = new Set(original.map(({ id }) => id))
+const originalLeaves = new Map(crownRegions(stableHistory.scene()).flatMap((region) => region.leaves)
+  .map((leaf) => [leaf.id, [leaf.x, leaf.y, leaf.angle, leaf.size, leaf.priority].map(rounded)]))
+const originalRegions = new Set(crownRegions(stableHistory.scene()).map(({ anchorPersistentId }) => anchorPersistentId))
+stableHistory.setTotalGrowth(103.4)
+const laterById = new Map(historicalSignature(stableHistory.scene()).map((item) => [item.id, item]))
+for (const item of original) assert.deepEqual(laterById.get(item.id), item, 'grown segments must not move or change random traits')
+for (const region of crownRegions(stableHistory.scene())) {
+  for (const leaf of region.leaves) {
+    const prior = originalLeaves.get(leaf.id)
+    if (prior) assert.deepEqual([leaf.x, leaf.y, leaf.angle, leaf.size, leaf.priority].map(rounded), prior, 'existing leaves must keep random traits')
+  }
+}
+assert.ok(historicalSignature(stableHistory.scene()).some(({ id }) => !originalIds.has(id)), 'new epochs must append geometry')
+for (const id of originalRegions) {
+  assert.ok(crownRegions(stableHistory.scene()).some(({ anchorPersistentId }) => anchorPersistentId === id), 'new crown growth must not resample old regions')
+}
+
+const checkpointSource = new TreeGrowthEngine(config)
+checkpointSource.setTotalGrowth(56.67)
+const restored = TreeGrowthEngine.restore(checkpointSource.createCheckpoint())
+assert.deepEqual(renderSignature(restored.scene()), renderSignature(checkpointSource.scene()), 'checkpoint restore must reproduce the same render state')
+assert.deepEqual(restored.createCheckpoint(), checkpointSource.createCheckpoint(), 'checkpoint restore must preserve frontier and IDs')
+restored.setTotalGrowth(80.25)
+checkpointSource.setTotalGrowth(80.25)
+assert.deepEqual(renderSignature(restored.scene()), renderSignature(checkpointSource.scene()), 'restored frontier must continue deterministically')
+
+const activeOnly = new TreeGrowthEngine(config)
+activeOnly.setTotalGrowth(1003.5)
+const activeCount = activeOnly.scene().skeleton.activeChunk?.branches.length ?? 0
+const fractional = activeOnly.setProgress(0.51)
+assert.equal(fractional.skeleton.stats.generatedEpochs, 0, 'fractional updates must not generate epochs')
+assert.equal(fractional.skeleton.stats.visitedHistoricalSegments, 0, 'fractional updates must not visit historical segments')
+assert.equal(fractional.skeleton.stats.activeSegments, activeCount, 'fractional updates must touch only the active epoch')
+
+const transform: ViewTransform = { rootX: 320, rootY: 580, scale: 4 }
+const rendererTree = new TreeGrowthEngine(config)
+rendererTree.setTotalGrowth(103)
+const selectedBefore = new Set(selectRenderableBranches(rendererTree.scene().skeleton, transform, 640, 640).map(({ persistentId }) => persistentId))
+rendererTree.setTotalGrowth(104)
+const selectedAfter = new Set(selectRenderableBranches(rendererTree.scene().skeleton, transform, 640, 640).map(({ persistentId }) => persistentId))
+for (const id of selectedBefore) assert.ok(selectedAfter.has(id), 'appending branches must not evict visible historical renderer choices')
+assert.ok([...selectedAfter].some((id) => !selectedBefore.has(id)), 'renderer must admit local new growth')
+
+const budgetBranch = (id: number, level: 1 | 3, birthEpoch = 0): BranchSegment => ({
+  id,
+  persistentId: `budget:${id}`,
+  parentId: null,
+  parentPersistentId: null,
+  branchId: id,
+  branchPersistentId: `budget-axis:${id}`,
+  branchProgress: 1,
+  x1: 0,
+  y1: 0,
+  x2: 1,
+  y2: 1,
+  width: 0.1,
+  depth: level,
+  level,
+  baseDirection: 0,
+  bendStrength: 0,
+  bendDirection: 1,
+  depthVisual: 0.5,
+  visibility: 1,
+  tone: 0.5,
+  priority: (id % 997) / 997,
+  birthEpoch,
+  birthProgress: 0,
+  growthDuration: 1,
+})
+const budgetBranches = [
+  ...Array.from({ length: 4_500 }, (_, id) => budgetBranch(id, 1)),
+  ...Array.from({ length: 2_500 }, (_, index) => budgetBranch(4_500 + index, 3)),
+]
+const budgetPlant: PlantSkeleton = {
+  root: { x: 0, y: 0 },
+  branches: budgetBranches,
+  chunks: [{
+    id: 0,
+    epochStart: 0,
+    epochEnd: 0,
+    originX: 0,
+    originY: 0,
+    bounds: { minX: 0, minY: 0, maxX: 1, maxY: 1 },
+    branches: budgetBranches,
+    microBranches: [],
+    regions: [],
+  }],
+  activeChunk: null,
+  foliageAnchors: [],
+  growthScale: 1,
+  time: { phase: 3, epoch: 1, progress: 0 },
+  supportByBranch: new Map(),
+  activeSupportByBranch: new Map(),
+  stats: { generatedEpochs: 0, activeSegments: 0, visitedHistoricalSegments: 0 },
+}
+const budgetSelection = selectRenderableBranches(budgetPlant, { rootX: 320, rootY: 320, scale: 1 }, 640, 640)
+assert.equal(new Set(budgetSelection.map(({ branchPersistentId }) => branchPersistentId)).size, 6_000, 'renderer axis budgets must be enforced')
+const budgetIds = budgetSelection.map(({ persistentId }) => persistentId)
+const additions = Array.from({ length: 100 }, (_, index) => budgetBranch(7_000 + index, index % 2 ? 1 : 3, 1))
+budgetPlant.chunks[0].branches.push(...additions)
+assert.deepEqual(
+  selectRenderableBranches(budgetPlant, { rootX: 320, rootY: 320, scale: 1 }, 640, 640).slice(0, budgetIds.length).map(({ persistentId }) => persistentId),
+  budgetIds,
+  'new branches must not reshuffle an exhausted renderer budget',
+)
+
+const morphology = new TreeGrowthEngine(config)
+morphology.setTotalGrowth(23)
+const beforeAppearance = historicalSignature(morphology.scene())
+morphology.setAppearance({ density: 0.1, vitality: 0.2 })
+assert.deepEqual(historicalSignature(morphology.scene()), beforeAppearance, 'appearance controls must not rewrite geometry')
+
+const dynamicSource = new TreeGrowthEngine(config)
+dynamicSource.setTotalGrowth(23.4)
+const dynamicCheckpoint = dynamicSource.createCheckpoint()
+const dynamicMorphology = TreeGrowthEngine.restore(dynamicCheckpoint)
+const staticMorphology = TreeGrowthEngine.restore(dynamicCheckpoint)
+const historyBeforeMorphology = historicalSignature(dynamicMorphology.scene())
+dynamicMorphology.setMorphology({ branching: 1, curvature: 1 })
+assert.deepEqual(historicalSignature(dynamicMorphology.scene()), historyBeforeMorphology, 'live morphology must not rewrite history')
+const restoredPendingMorphology = TreeGrowthEngine.restore(dynamicMorphology.createCheckpoint())
+dynamicMorphology.setTotalGrowth(25.4)
+restoredPendingMorphology.setTotalGrowth(25.4)
+staticMorphology.setTotalGrowth(25.4)
+assert.deepEqual(renderSignature(restoredPendingMorphology.scene()), renderSignature(dynamicMorphology.scene()), 'pending morphology must survive checkpoints')
+assert.deepEqual(
+  historicalSignature(dynamicMorphology.scene()).slice(0, historyBeforeMorphology.length),
+  historyBeforeMorphology,
+  'new morphology must preserve every existing segment',
+)
+assert.notDeepEqual(renderSignature(dynamicMorphology.scene()), renderSignature(staticMorphology.scene()), 'new morphology must affect later epochs')
+
+const liveMorphology = new TreeGrowthEngine({ ...config, branching: 0.1, curvature: 0 })
+const liveBeforeScene = liveMorphology.setTotalGrowth(3.65)
+const liveHistory = historicalSignature(liveBeforeScene)
+const activeBeforeMorphology = new Map((liveBeforeScene.skeleton.activeChunk?.branches ?? [])
+  .map((branch) => [branch.persistentId, { ...branch }]))
+const liveAfterScene = liveMorphology.setMorphology({ branching: 1, curvature: 1 })
+const activeAfterMorphology = liveAfterScene.skeleton.activeChunk?.branches ?? []
+assert.deepEqual(historicalSignature(liveAfterScene), liveHistory, 'real-time morphology must leave completed history untouched')
+for (const branch of activeBeforeMorphology.values()) {
+  if (branch.visibility <= 0) continue
+  assert.ok(activeAfterMorphology.some(({ persistentId }) => persistentId === branch.persistentId), 'a born active fragment must not disappear')
+  if (branch.visibility === 1) {
+    const after = activeAfterMorphology.find(({ persistentId }) => persistentId === branch.persistentId)!
+    assert.deepEqual([after.x1, after.y1, after.x2, after.y2], [branch.x1, branch.y1, branch.x2, branch.y2], 'a finished active fragment must freeze')
+  }
+}
+assert.ok(activeAfterMorphology.some((branch) => {
+  const before = activeBeforeMorphology.get(branch.persistentId)
+  return before && before.visibility > 0 && before.visibility < 1 && (before.x2 !== branch.x2 || before.y2 !== branch.y2)
+}), 'a growing fragment must react to live curvature')
+for (const branch of activeAfterMorphology.filter(({ persistentId }) => !activeBeforeMorphology.has(persistentId))) {
+  assert.equal(branch.visibility, 0, 'a branch introduced by live branching must start at zero length')
+}
+
+const morphologyAge = new TreeGrowthEngine(config)
+const agedScene = morphologyAge.setTotalGrowth(37.42)
+const regenerated = new TreeGrowthEngine({ ...config, seed: 987654321 })
+const regeneratedScene = regenerated.setTotalGrowth(3 + agedScene.skeleton.time.epoch + agedScene.skeleton.time.progress)
+assert.deepEqual(regeneratedScene.skeleton.time, agedScene.skeleton.time, 'full morphology regeneration must preserve growth time')
+assert.notDeepEqual(historicalSignature(regeneratedScene), historicalSignature(agedScene), 'full morphology regeneration must replace geometry')
+
+const invisibleFrontier = new TreeGrowthEngine(config).setTotalGrowth(3).skeleton.activeChunk
+assert.deepEqual(
+  invisibleFrontier?.bounds,
+  { minX: 0, minY: 0, maxX: 0, maxY: 0 },
+  'future geometry must not affect active bounds before it becomes visible',
+)
+
+for (const extreme of [
+  { seed: 0, branching: 0, curvature: 0 },
+  { seed: 0xffffffff, branching: 1, curvature: 1 },
+]) {
+  const scene = new TreeGrowthEngine({ ...config, ...extreme }).setTotalGrowth(12.5)
+  assert.ok(Object.values(scene.bounds).every(Number.isFinite), 'valid morphology extremes must keep finite render bounds')
+}
+
+console.log('growth checks passed', {
+  epochs: stableHistory.scene().skeleton.time.epoch,
+  segments: branches(stableHistory.scene()).length,
+  chunks: stableHistory.scene().skeleton.chunks.length,
+  regions: crownRegions(stableHistory.scene()).length,
 })

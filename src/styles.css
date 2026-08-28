@@ -25,22 +25,29 @@ main {
 }
 
 h1, h2 { margin: 0 0 20px; }
+.growth-status { margin: -12px 0 18px; color: #58704c; }
 .controls label { display: grid; grid-template-columns: 78px 1fr 42px; align-items: center; gap: 8px; margin: 12px 0; }
 .controls label:has(input[type='number']) { grid-template-columns: 78px 1fr; }
 input[type='range'] { width: 100%; accent-color: #5f8d45; }
 input[type='number'] { width: 100%; padding: 6px 8px; color: inherit; background: #fff; border: 1px solid #aeba9f; }
 output { text-align: right; font-variant-numeric: tabular-nums; }
 button { width: 100%; padding: 8px; color: inherit; cursor: pointer; background: #edf2e8; border: 1px solid #aeba9f; border-radius: 4px; }
+button:disabled { cursor: default; opacity: 0.55; }
 .controls > button { margin-top: 8px; }
+.controls fieldset { margin: 20px 0 12px; padding: 10px 12px 14px; border: 1px solid #c7d2bd; border-radius: 8px; }
+.controls fieldset label { grid-template-columns: 74px 1fr 38px; }
+.controls fieldset button { margin-top: 6px; }
+.controls small { display: block; margin-top: 8px; color: #806230; }
+.controls .follow-control { grid-template-columns: auto 1fr; }
 .phase-buttons { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 18px; }
 .phase-buttons button { width: auto; flex: 1 0 52px; padding: 6px 2px; }
 .phase-buttons button[aria-pressed='true'] { color: white; background: #5f8d45; border-color: #477132; }
 .epoch-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin: -4px 0 14px; }
 .epoch-buttons button:last-child { grid-column: 1 / -1; }
 pre { overflow: auto; padding: 12px; background: #f2f0e9; font-size: 12px; }
-canvas { display: block; width: 100%; height: auto; touch-action: none; cursor: grab; user-select: none; border: 1px solid #b7c4ab; border-radius: 8px; box-shadow: 0 12px 30px rgba(49, 66, 39, 0.14); }
-canvas:active { cursor: grabbing; }
-canvas:focus-visible { outline: 3px solid #5f8d45; outline-offset: 3px; }
+.plant-surface { display: block; width: 100%; height: auto; touch-action: none; cursor: grab; user-select: none; border: 1px solid #b7c4ab; border-radius: 8px; box-shadow: 0 12px 30px rgba(49, 66, 39, 0.14); }
+.plant-surface:active { cursor: grabbing; }
+.plant-surface:focus-visible { outline: 3px solid #5f8d45; outline-offset: 3px; }
 
 @media (max-width: 760px) {
   main { grid-template-columns: 1fr; }
