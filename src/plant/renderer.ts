@@ -4,7 +4,7 @@ const MAJOR_AXIS_BUDGET = 4000
 const DETAIL_AXIS_BUDGET = 2000
 const MICRO_BRANCH_BUDGET = 2000
 const REGION_BUDGET = 1000
-const LEAF_BUDGET = 3000
+const LEAF_BUDGET = 900
 
 function screenPoint(x: number, y: number, plant: PlantSkeleton, transform: ViewTransform) {
   const scale = transform.scale * plant.growthScale

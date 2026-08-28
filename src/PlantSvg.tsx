@@ -14,16 +14,16 @@ import { computeViewTransform } from './plant/view.ts'
 import type { BranchSegment, CrownRegion, GrowthCheckpointV1, GrowthScene, GrowthTime, PlantConfig, PlantSkeleton, ViewTransform } from './plant/types.ts'
 
 const VIEW_SIZE = 640
-const leafA = new URL('../assets/IMG_9553.PNG', import.meta.url).href
-const leafB = new URL('../assets/IMG_9554.PNG', import.meta.url).href
-const leafC = new URL('../assets/IMG_9555.PNG', import.meta.url).href
-const leafCluster = new URL('../assets/IMG_9556.PNG', import.meta.url).href
-const twigA = new URL('../assets/IMG_9558.PNG', import.meta.url).href
-const twigB = new URL('../assets/IMG_9562.PNG', import.meta.url).href
-const twigC = new URL('../assets/IMG_9564.PNG', import.meta.url).href
-const twigD = new URL('../assets/IMG_9565.PNG', import.meta.url).href
-const sprout = new URL('../assets/IMG_9566.PNG', import.meta.url).href
-const leafAssets = [leafA, leafB, leafC, leafCluster, sprout]
+const leafA = new URL('../assets/optimized/IMG_9553.webp', import.meta.url).href
+const leafB = new URL('../assets/optimized/IMG_9554.webp', import.meta.url).href
+const leafC = new URL('../assets/optimized/IMG_9555.webp', import.meta.url).href
+const leafCluster = new URL('../assets/optimized/IMG_9556.webp', import.meta.url).href
+const twigA = new URL('../assets/optimized/IMG_9558.webp', import.meta.url).href
+const twigB = new URL('../assets/optimized/IMG_9562.webp', import.meta.url).href
+const twigC = new URL('../assets/optimized/IMG_9564.webp', import.meta.url).href
+const twigD = new URL('../assets/optimized/IMG_9565.webp', import.meta.url).href
+const floraStrip = new URL('../assets/optimized/IMG_9557.webp', import.meta.url).href
+const leafAssets = [leafA, leafB, leafC, leafC, leafCluster]
 const twigAssets = [twigA, twigB, twigC, twigD]
 
 type Pointer = { x: number; y: number }
@@ -92,7 +92,7 @@ function regionLeaves(regions: CrownRegion[], density: number, screenScale: numb
     const leaves = region.leaves.filter((leaf) => leaf.priority <= density && leaf.opacity > 0).slice(0, leavesLeft)
     leavesLeft -= leaves.length
     return leaves.map((leaf) => {
-      const size = leaf.size * leaf.opacity * (0.65 + leaf.depthVisual * 0.35) * (0.55 + region.visibility * 0.45) * 1.35
+      const size = leaf.size * leaf.opacity * (0.65 + leaf.depthVisual * 0.35) * (0.55 + region.visibility * 0.45) * 1.7
       const x = region.x + leaf.x
       const y = region.y + leaf.y
       return {
@@ -103,7 +103,7 @@ function regionLeaves(regions: CrownRegion[], density: number, screenScale: numb
         cx: x,
         cy: y,
         angle: -leaf.angle * 180 / Math.PI,
-        opacity: region.visibility * (0.45 + leaf.vitality * 0.45),
+        opacity: region.visibility * (0.42 + leaf.vitality * 0.46) * (0.78 + leaf.depthVisual * 0.22),
         key: leaf.id,
       }
     })
@@ -404,6 +404,7 @@ export function PlantSvg({
   const screenScale = currentTransform ? currentTransform.scale * plant.growthScale : 0
   const paths = branchPaths(plant, branches)
   const leaves = regionLeaves(regions, scene.crown.density, screenScale)
+  const undergrowthOpacity = plant.time.phase < 2 ? 0 : 0.12 + Math.min(0.08, plant.time.phase === 3 ? plant.time.progress * 0.08 : 0.04)
 
   return <svg
     ref={surfaceRef}
@@ -423,29 +424,53 @@ export function PlantSvg({
     <desc id="plant-description">Drag to pan, use wheel or pinch to zoom, and press F to fit.</desc>
     <defs>
       <linearGradient id="plant-background" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0" stopColor="#eef5e9" />
-        <stop offset="0.72" stopColor="#dce9d2" />
-        <stop offset="1" stopColor="#cbdabf" />
+        <stop offset="0" stopColor="#f7f5ec" />
+        <stop offset="0.52" stopColor="#e7efe0" />
+        <stop offset="1" stopColor="#c4d1b9" />
       </linearGradient>
+      <radialGradient id="plant-light" cx="48%" cy="26%" r="78%">
+        <stop offset="0" stopColor="#fffdf4" stopOpacity="0.75" />
+        <stop offset="0.68" stopColor="#f0f3e5" stopOpacity="0.12" />
+        <stop offset="1" stopColor="#849879" stopOpacity="0.22" />
+      </radialGradient>
       <radialGradient id="plant-ground" cx="50%" cy="100%" r="45%">
         <stop offset="0" stopColor="#476732" stopOpacity="0.18" />
         <stop offset="1" stopColor="#476732" stopOpacity="0" />
       </radialGradient>
       <radialGradient id="crown-cloud" cx="50%" cy="45%" r="65%">
-        <stop offset="0" stopColor="#6e9e55" stopOpacity="0.42" />
-        <stop offset="0.58" stopColor="#5c914c" stopOpacity="0.18" />
+        <stop offset="0" stopColor="#6e9e55" stopOpacity="0.2" />
+        <stop offset="0.58" stopColor="#5c914c" stopOpacity="0.08" />
         <stop offset="1" stopColor="#3b7030" stopOpacity="0" />
       </radialGradient>
+      <radialGradient id="tree-shadow" cx="50%" cy="50%" r="50%">
+        <stop offset="0" stopColor="#34452c" stopOpacity="0.24" />
+        <stop offset="1" stopColor="#34452c" stopOpacity="0" />
+      </radialGradient>
+      <filter id="branch-shadow" x="-20%" y="-20%" width="140%" height="140%">
+        <feDropShadow dx="0.25" dy="0.5" stdDeviation="0.35" floodColor="#2b211b" floodOpacity="0.28" />
+      </filter>
     </defs>
     <rect width={width} height={height} fill="url(#plant-background)" />
+    <rect width={width} height={height} fill="url(#plant-light)" />
     <rect y={height * 0.82} width={width} height={height * 0.18} fill="url(#plant-ground)" />
+    <ellipse cx={width * 0.5} cy={height * 0.84} rx={width * 0.25} ry={height * 0.035} fill="url(#tree-shadow)" />
+    <image
+      href={floraStrip}
+      x="0"
+      y={height * 0.7}
+      width={width}
+      height={height * 0.3}
+      preserveAspectRatio="xMidYMax slice"
+      opacity={undergrowthOpacity}
+      aria-hidden="true"
+    />
     {currentTransform && <g transform={`translate(${currentTransform.rootX} ${currentTransform.rootY}) scale(${currentTransform.scale * plant.growthScale} ${-currentTransform.scale * plant.growthScale}) translate(${-plant.root.x} ${-plant.root.y})`}>
       <g>
         {regions.filter((region) => Math.max(region.radiusX, region.radiusY) * screenScale < 1.5).map((region) => (
           <ellipse key={`soft-${region.anchorPersistentId}`} cx={region.x} cy={region.y} rx={region.radiusX} ry={region.radiusY} fill="#4d9a39" fillOpacity="0.2" />
         ))}
         {regions.filter((region) => Math.max(region.radiusX, region.radiusY) * screenScale >= 1.5).map((region) => (
-          <ellipse key={`cloud-${region.anchorPersistentId}`} cx={region.x} cy={region.y} rx={region.radiusX} ry={region.radiusY} fill="url(#crown-cloud)" opacity={region.visibility * (0.72 + region.depthVisual * 0.28)} />
+          <ellipse key={`cloud-${region.anchorPersistentId}`} cx={region.x} cy={region.y} rx={region.radiusX} ry={region.radiusY} fill="url(#crown-cloud)" opacity={region.visibility * (0.34 + region.depthVisual * 0.2)} />
         ))}
         {regions.filter((region, index) => Math.max(region.radiusX, region.radiusY) * screenScale >= 18 && index % 12 === 0).map((region, index) => {
           const size = Math.max(region.radiusX, region.radiusY) * 3.2
@@ -476,7 +501,7 @@ export function PlantSvg({
           />
         ))}
       </g>
-      <g fill="none" strokeLinecap="round" strokeLinejoin="round">
+      <g fill="none" strokeLinecap="round" strokeLinejoin="round" filter="url(#branch-shadow)">
         {paths.map((path) => <path key={path.key} d={path.d} stroke={path.color} strokeWidth={path.width} />)}
       </g>
       <g fill="none" strokeLinecap="round">

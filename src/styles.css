@@ -1,7 +1,7 @@
 :root {
   font-family: Inter, system-ui, sans-serif;
   color: #2e3829;
-  background: #e8eee2;
+  background: radial-gradient(circle at 50% 0%, #f6f6ec 0, #e8eee2 48%, #d9e2d3 100%);
 }
 
 * { box-sizing: border-box; }
@@ -20,8 +20,8 @@ main {
   padding: 20px;
   border: 1px solid #c7d2bd;
   border-radius: 12px;
-  background: #fffdf8;
-  box-shadow: 0 16px 45px rgba(49, 66, 39, 0.12);
+  background: rgba(255, 253, 248, 0.88);
+  box-shadow: 0 18px 50px rgba(49, 66, 39, 0.14);
 }
 
 h1, h2 { margin: 0 0 20px; }
@@ -45,7 +45,7 @@ button:disabled { cursor: default; opacity: 0.55; }
 .epoch-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin: -4px 0 14px; }
 .epoch-buttons button:last-child { grid-column: 1 / -1; }
 pre { overflow: auto; padding: 12px; background: #f2f0e9; font-size: 12px; }
-.plant-surface { display: block; width: 100%; height: auto; touch-action: none; cursor: grab; user-select: none; border: 1px solid #b7c4ab; border-radius: 8px; box-shadow: 0 12px 30px rgba(49, 66, 39, 0.14); }
+.plant-surface { display: block; width: 100%; height: auto; touch-action: none; cursor: grab; user-select: none; border: 1px solid #aab99f; border-radius: 8px; box-shadow: 0 16px 36px rgba(49, 66, 39, 0.18); }
 .plant-surface:active { cursor: grabbing; }
 .plant-surface:focus-visible { outline: 3px solid #5f8d45; outline-offset: 3px; }
 
