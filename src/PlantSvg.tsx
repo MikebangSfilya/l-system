@@ -17,14 +17,8 @@ const VIEW_SIZE = 640
 const leafA = new URL('../assets/optimized/IMG_9553.webp', import.meta.url).href
 const leafB = new URL('../assets/optimized/IMG_9554.webp', import.meta.url).href
 const leafC = new URL('../assets/optimized/IMG_9555.webp', import.meta.url).href
-const leafCluster = new URL('../assets/optimized/IMG_9556.webp', import.meta.url).href
-const twigA = new URL('../assets/optimized/IMG_9558.webp', import.meta.url).href
-const twigB = new URL('../assets/optimized/IMG_9562.webp', import.meta.url).href
-const twigC = new URL('../assets/optimized/IMG_9564.webp', import.meta.url).href
-const twigD = new URL('../assets/optimized/IMG_9565.webp', import.meta.url).href
 const floraStrip = new URL('../assets/optimized/IMG_9557.webp', import.meta.url).href
-const leafAssets = [leafA, leafB, leafC, leafC, leafCluster]
-const twigAssets = [twigA, twigB, twigC, twigD]
+const leafAssets = [leafA, leafB, leafC]
 
 type Pointer = { x: number; y: number }
 type RestoredConfig = PlantConfig & { time: GrowthTime }
@@ -472,20 +466,6 @@ export function PlantSvg({
         {regions.filter((region) => Math.max(region.radiusX, region.radiusY) * screenScale >= 1.5).map((region) => (
           <ellipse key={`cloud-${region.anchorPersistentId}`} cx={region.x} cy={region.y} rx={region.radiusX} ry={region.radiusY} fill="url(#crown-cloud)" opacity={region.visibility * (0.34 + region.depthVisual * 0.2)} />
         ))}
-        {regions.filter((region, index) => Math.max(region.radiusX, region.radiusY) * screenScale >= 18 && index % 12 === 0).map((region, index) => {
-          const size = Math.max(region.radiusX, region.radiusY) * 3.2
-          return <image
-            key={`twig-${region.anchorPersistentId}`}
-            href={twigAssets[index % twigAssets.length]}
-            x={region.x - size / 2}
-            y={region.y - size / 2}
-            width={size}
-            height={size}
-            preserveAspectRatio="xMidYMid meet"
-            opacity={region.visibility * 0.28}
-            aria-hidden="true"
-          />
-        })}
         {leaves.map((leaf) => (
           <image
             key={leaf.key}
