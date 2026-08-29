@@ -21,7 +21,8 @@ export default function App() {
   const [time, setTime] = useState<GrowthTime>({ phase: 0, epoch: 0, progress: 0 })
   const [fitRequest, setFitRequest] = useState(0)
   const [regenerateRequest, setRegenerateRequest] = useState(0)
-  const [serverGrowth, setServerGrowth] = useState<number>()
+  const [growthRequest, setGrowthRequest] = useState({ total: 0, version: 0 })
+  const [zoomRequest, setZoomRequest] = useState(0)
   const [routines, setRoutines] = useState<Routine[]>([])
   const [completions, setCompletions] = useState<Array<{ routineId: number; completedAt: string }>>([])
   const [routineName, setRoutineName] = useState('')
@@ -42,14 +43,16 @@ export default function App() {
     return routine?.timeType.disposable || completion.completedAt.slice(0, 10) === today
   }).map(({ routineId }) => routineId))
   const selectedDemo = demoTrees.find(({ name }) => name === demoUser) ?? demoTrees[0]
+  const requestGrowth = (total: number) => setGrowthRequest((current) => ({ total, version: current.version + 1 }))
 
-  const applyPlant = (plant: Plant) => {
+  const applyPlant = (plant: Plant, showWholeTree = false) => {
     const phase = Math.max(0, Math.min(3, plant.phase)) as PlantPhase
     const progress = Math.max(0, Math.min(1, plant.phaseProgress))
     const growth = phase < 3 ? phase + progress : 3 + Math.max(0, plant.epoch) + progress
     setConfig((current) => ({ ...current, branching: plant.branching, density: plant.density, curvature: plant.curvature, vitality: plant.vitality, seed: plant.seed, progress }))
     setTime({ phase, epoch: phase === 3 ? Math.max(0, plant.epoch) : 0, progress })
-    setServerGrowth(growth)
+    requestGrowth(growth)
+    if (showWholeTree) setFitRequest((request) => request + 1)
     setViewSource('api')
   }
 
@@ -57,7 +60,7 @@ export default function App() {
     void Promise.all([getRoutines(), getCompletions(), getPlant()]).then(([nextRoutines, nextCompletions, plant]) => {
       setRoutines(nextRoutines)
       setCompletions(nextCompletions)
-      applyPlant(plant)
+      applyPlant(plant, true)
     }).catch((error: Error) => setRoutineError(error.message)).finally(() => setLoadingRoutines(false))
   }, [])
 
@@ -94,15 +97,15 @@ export default function App() {
     setDemoUser(demo.name)
     setConfig({ seed: demo.seed, branching: demo.branching, curvature: demo.curvature, density: demo.density, vitality: demo.vitality, progress: demo.progress })
     setTime(timeFromGrowth(demo.growth))
-    setServerGrowth(demo.growth)
+    requestGrowth(demo.growth)
+    setFitRequest((request) => request + 1)
     setViewSource('demo')
-    setRegenerateRequest((request) => request + 1)
   }
 
   const restoreApiTree = async () => {
     setRoutineError('')
     try {
-      applyPlant(await getPlant())
+      applyPlant(await getPlant(), true)
     } catch (error) {
       setRoutineError(error instanceof Error ? error.message : 'Не удалось загрузить дерево из API')
     }
@@ -168,6 +171,8 @@ export default function App() {
           <div><p className="eyebrow">{viewSource === 'api' ? 'Текущее дерево · синхронизировано с API' : `Демо: ${selectedDemo.name} · ${selectedDemo.label}`}</p><h2>{time.phase === 3 ? `${phaseNames[time.phase]} · эпоха ${time.epoch}` : phaseNames[time.phase]}</h2></div>
           <div className="tree-actions">
             <button className={demoMode ? 'demo-button active' : 'demo-button'} type="button" onClick={() => setDemoMode((open) => !open)} aria-pressed={demoMode}>Демо-показ</button>
+            <button className="zoom-tree" type="button" onClick={() => setZoomRequest((request) => request - 1)} aria-label="Уменьшить масштаб">−</button>
+            <button className="zoom-tree" type="button" onClick={() => setZoomRequest((request) => request + 1)} aria-label="Увеличить масштаб">+</button>
             <button className="fit-tree" type="button" onClick={() => setFitRequest((request) => request + 1)}>Показать целиком</button>
           </div>
         </header>
@@ -193,14 +198,11 @@ export default function App() {
           regenerateRequest={regenerateRequest}
           resetRequest={0}
           follow={false}
-          serverGrowth={serverGrowth}
+          growthRequest={growthRequest}
+          zoomRequest={zoomRequest}
           onTimeChange={(nextTime) => {
             setTime(nextTime)
             setConfig((current) => nextTime.progress === current.progress ? current : { ...current, progress: nextTime.progress })
-          }}
-          onRestore={(restored) => {
-            setConfig(restored)
-            setTime(restored.time)
           }}
         />
       </section>

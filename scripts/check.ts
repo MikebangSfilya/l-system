@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { TreeGrowthEngine } from '../src/plant/generator.ts'
 import { effectiveBranchWidth, selectRenderableBranches, selectRenderableRegions } from '../src/plant/renderer.ts'
-import { constrainViewTransform } from '../src/plant/view.ts'
+import { constrainViewTransform, verticalTravelLimit, zoomViewTransform } from '../src/plant/view.ts'
 import type { BranchSegment, CrownRegion, GrowthCheckpointV1, GrowthScene, PlantConfig, PlantSkeleton, ViewTransform } from '../src/plant/types.ts'
 
 const config: PlantConfig = {
@@ -14,17 +14,47 @@ const config: PlantConfig = {
   seed: 12345,
 }
 
+const appSource = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8')
+const svgSource = readFileSync(new URL('../src/PlantSvg.tsx', import.meta.url), 'utf8')
+
 assert.doesNotMatch(
-  readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8'),
+  appSource,
   /set[A-Z]\w*\(\(current\)\s*=>\s*\([^)]*event\.currentTarget/,
   'React event values must be copied before entering a state updater',
 )
+assert.match(appSource, /version: current\.version \+ 1/, 'every API or demo selection must issue a fresh growth request')
+assert.match(svgSource, /growthRequestRef\.current !== growthRequest\.version/, 'a fresh growth request must rebuild the engine even at zero growth')
+assert.doesNotMatch(svgSource, /loadGrowth|saveGrowth/, 'controlled API and demo trees must not restore stale local growth')
+assert.match(svgSource, /cosmic-garden-v1\.png/, 'the night scene must use the generated cosmic-garden backdrop')
+assert.match(svgSource, /moonlit-moss-v2\.png/, 'the ground must use the revised moonlit moss texture')
+assert.doesNotMatch(svgSource, /const starField/, 'the old procedural star field must not compete with the painted backdrop')
+assert.doesNotMatch(svgSource, /id="far-hills"/, 'the ground must not fall back to stacked gradient bands')
+assert.doesNotMatch(svgSource, /flora-sides/, 'the foreground flora must not be clipped into side fragments')
+assert.match(svgSource, /const zoomAt/, 'the scene must retain an explicit zoom control')
+assert.match(svgSource, /if \(!transformRef\.current \|\| fitRequestRef\.current !== fitRequest\)/, 'growth updates must preserve the current camera unless fit is requested')
+assert.doesNotMatch(svgSource, /sceneryTransform/, 'the scenery must stay fixed while the tree travels')
+assert.doesNotMatch(svgSource, /growth-origin/, 'the detached growth-origin mound must not be rendered')
+assert.match(svgSource, /const treeTransform = currentTransform \? \{ \.\.\.currentTransform, rootY: currentTransform\.rootY \+ sceneOffset \} : undefined/, 'tree travel must not mutate the growth origin')
 
 const constrainedCamera = constrainViewTransform(
   { rootX: -500, rootY: 999, scale: 2 },
   { width: 640, height: 640 },
 )
 assert.deepEqual(constrainedCamera, { rootX: 320, rootY: 563.2, scale: 2 }, 'camera must keep the tree fixed while the sky moves independently')
+assert.deepEqual(
+  zoomViewTransform({ rootX: 320, rootY: 563.2, scale: 2 }, 2.4),
+  { rootX: 320, rootY: 563.2, scale: 2.4 },
+  'zoom must preserve the tree root coordinates',
+)
+assert.ok(
+  Math.abs(verticalTravelLimit({ minX: 0, minY: 0, maxX: 0, maxY: 400 }, { x: 0, y: 0 }, { rootX: 320, rootY: 563.2, scale: 2 }, 1, 640, 0.12) - 313.6) < 1e-9,
+  'vertical travel must stop when the tree top reaches the viewport padding',
+)
+assert.equal(
+  verticalTravelLimit({ minX: 0, minY: 0, maxX: 0, maxY: 100 }, { x: 0, y: 0 }, { rootX: 320, rootY: 563.2, scale: 2 }, 1, 640, 0.12),
+  0,
+  'a tree that already fits must not travel away from its growth origin',
+)
 
 const branches = (scene: GrowthScene) => [
   ...scene.skeleton.chunks.flatMap((chunk) => chunk.branches),

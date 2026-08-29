@@ -61,9 +61,11 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .tree-header h2 { margin: 0; color: #fff; font-size: 25px; letter-spacing: -.02em; }
 .tree-header .eyebrow { color: #bfc6ff; }
 .tree-actions { display: flex; gap: 8px; }
-.fit-tree, .demo-button { width: auto; padding: 8px 11px; border-radius: 8px; }
+.fit-tree, .demo-button, .zoom-tree { width: auto; padding: 8px 11px; border-radius: 8px; }
 .fit-tree { color: #e8e9ff; background: rgba(18, 23, 50, .68); border: 1px solid rgba(185, 197, 255, .34); }
 .fit-tree:hover { background: rgba(56, 67, 119, .55); }
+.zoom-tree { min-width: 34px; padding-inline: 9px; color: #e8e9ff; background: rgba(18, 23, 50, .68); border: 1px solid rgba(185, 197, 255, .34); font-size: 18px; line-height: 1; }
+.zoom-tree:hover { background: rgba(56, 67, 119, .55); }
 .demo-button { color: #201d38; background: linear-gradient(110deg, #d9c4ff, #f0dd92); border: 1px solid transparent; font-weight: 750; }
 .demo-button.active { color: #fff; background: #353160; border-color: #a89be3; }
 .demo-controls { display: grid; grid-template-columns: repeat(5, minmax(120px, 1fr)) auto auto; gap: 8px 12px; align-items: end; padding: 12px; margin-bottom: 12px; background: rgba(22, 28, 59, .76); border: 1px solid rgba(189, 198, 255, .22); border-radius: 12px; box-shadow: 0 12px 30px rgba(2, 4, 17, .34); backdrop-filter: blur(12px); }
@@ -72,7 +74,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .demo-controls output { font-variant-numeric: tabular-nums; }
 .demo-controls .seed-control input { grid-column: 1 / -1; width: 100%; min-width: 105px; padding: 6px; color: #eef0ff; background: rgba(5, 8, 24, .68); border: 1px solid rgba(185, 197, 255, .3); border-radius: 6px; }
 .demo-controls button { width: auto; padding: 7px 9px; color: #e9eaff; background: rgba(147, 130, 210, .17); border: 1px solid rgba(197, 185, 255, .38); border-radius: 7px; white-space: nowrap; }
-.plant-surface { display: block; width: 100%; height: min(82vh, calc(100vh - 125px)); touch-action: none; cursor: grab; user-select: none; border: 1px solid rgba(195, 205, 255, .26); border-radius: 18px; background: #0a0d1c; box-shadow: 0 25px 60px rgba(1, 2, 12, .45), inset 0 1px rgba(255, 255, 255, .08); }
+.plant-surface { display: block; width: min(100%, 82vh, calc(100vh - 125px)); height: auto; aspect-ratio: 1; justify-self: center; touch-action: none; cursor: grab; user-select: none; border: 1px solid rgba(195, 205, 255, .26); border-radius: 18px; background: #0a0d1c; box-shadow: 0 25px 60px rgba(1, 2, 12, .45), inset 0 1px rgba(255, 255, 255, .08); }
 .plant-surface:active { cursor: grabbing; }
 .plant-surface:focus-visible { outline: 3px solid #d2b7ff; outline-offset: 3px; }
 
@@ -87,5 +89,5 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
   .tree-header { align-items: start; gap: 10px; }
   .tree-actions { flex-wrap: wrap; justify-content: end; }
   .demo-controls { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .plant-surface { height: 68vh; }
+  .plant-surface { width: min(100%, 68vh); height: auto; }
 }
