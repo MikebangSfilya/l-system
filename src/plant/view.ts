@@ -49,3 +49,19 @@ export function constrainViewTransform(
     rootY: viewportSize.height * 0.88,
   }
 }
+
+export function zoomViewTransform(transform: ViewTransform, scale: number): ViewTransform {
+  return { ...transform, scale }
+}
+
+export function verticalTravelLimit(
+  bounds: Bounds,
+  root: PlantSkeleton['root'],
+  transform: ViewTransform,
+  growthScale: number,
+  viewportHeight: number,
+  padding: number,
+) {
+  const treeHeight = Math.max(0, bounds.maxY - root.y) * transform.scale * growthScale
+  return Math.max(0, treeHeight - transform.rootY + viewportHeight * padding)
+}
