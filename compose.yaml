@@ -2,5 +2,5 @@ services:
   plant:
     build: .
     ports:
-      - "8080:80"
+      - "${PLANT_PORT:-8081}:80"
     restart: unless-stopped

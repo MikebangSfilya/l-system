@@ -7,10 +7,10 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "check": "node --experimental-strip-types scripts/check.ts",
+    "benchmark:growth": "node --experimental-strip-types scripts/benchmark.ts",
     "preview": "vite preview"
   },
   "dependencies": {
-    "lindenmayer": "1.5.4",
     "react": "19.2.8",
     "react-dom": "19.2.8"
   },
