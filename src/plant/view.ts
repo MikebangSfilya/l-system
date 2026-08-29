@@ -38,3 +38,14 @@ export function computeViewTransform(
     ),
   }
 }
+
+export function constrainViewTransform(
+  transform: ViewTransform,
+  viewportSize: { width: number; height: number },
+): ViewTransform {
+  return {
+    ...transform,
+    rootX: viewportSize.width / 2,
+    rootY: viewportSize.height * 0.88,
+  }
+}

@@ -5,12 +5,11 @@ import { clearGrowth, loadGrowth, saveGrowth } from './plant/growthStore.ts'
 import {
   boundsOnScreen,
   effectiveBranchWidth,
-  leafBudget,
   selectRenderableBranches,
   selectRenderableMicroBranches,
   selectRenderableRegions,
 } from './plant/renderer.ts'
-import { computeViewTransform } from './plant/view.ts'
+import { computeViewTransform, constrainViewTransform } from './plant/view.ts'
 import type { BranchSegment, CrownRegion, GrowthCheckpointV1, GrowthScene, GrowthTime, PlantConfig, PlantSkeleton, ViewTransform } from './plant/types.ts'
 
 const VIEW_SIZE = 640
@@ -20,10 +19,34 @@ const leafC = new URL('../assets/optimized/IMG_9555.webp', import.meta.url).href
 const floraStrip = new URL('../assets/optimized/IMG_9557.webp', import.meta.url).href
 const leafAssets = [leafA, leafB, leafC]
 
+const starField = Array.from({ length: 126 }, (_, index) => {
+  const arm = index % 3
+  const step = Math.floor(index / 3) / 42
+  const angle = arm * Math.PI * 2 / 3 + step * 8.4
+  const radius = 16 + Math.pow(step, 1.18) * 500
+  return {
+    x: 330 + Math.cos(angle) * radius,
+    y: 118 + Math.sin(angle) * radius * 0.72,
+    radius: 0.45 + (index % 7) * 0.11,
+    opacity: 0.28 + (index % 5) * 0.1,
+    key: index,
+  }
+})
+
+const starStreaks = Array.from({ length: 30 }, (_, index) => {
+  const arm = index % 3
+  const step = Math.floor(index / 3) / 10
+  const angle = arm * Math.PI * 2 / 3 + step * 7.4
+  const radius = 38 + step * 410
+  const x = 330 + Math.cos(angle) * radius
+  const y = 118 + Math.sin(angle) * radius * 0.72
+  const length = 4 + (index % 4) * 2
+  return { x, y, length, angle: angle * 180 / Math.PI + 16, opacity: 0.12 + (index % 4) * 0.04, key: index }
+})
+
 type Pointer = { x: number; y: number }
 type RestoredConfig = PlantConfig & { time: GrowthTime }
 
-const clampZoom = (scale: number) => Math.min(240, Math.max(0.02, scale))
 const totalGrowth = ({ phase, epoch, progress }: GrowthTime) => phase < 3 ? phase + progress : 3 + epoch + progress
 
 function useLazyRef<Value>(create: () => Value) {
@@ -51,7 +74,8 @@ function branchPaths(plant: PlantSkeleton, branches: BranchSegment[]) {
     const visible = segments.filter(({ visibility }) => visibility > 0)
     if (visible.length === 0) return []
     const depthWeight = 0.72 + visible[0].depthVisual * 0.34
-    const chunkSize = Math.max(1, Math.ceil(visible.length / 6))
+    // The trunk needs its natural taper at every joint; averaging twelve segments makes a visible step.
+    const chunkSize = visible[0].level === 0 ? 1 : Math.max(1, Math.ceil(visible.length / 12))
     return [false, true].flatMap((inner) => Array.from({ length: Math.ceil(visible.length / chunkSize) }, (_, index) => {
       const chunk = visible.slice(index * chunkSize, (index + 1) * chunkSize)
       let d = ''
@@ -65,10 +89,10 @@ function branchPaths(plant: PlantSkeleton, branches: BranchSegment[]) {
       const width = chunk.reduce((total, branch) => total + effectiveBranchWidth(branch, plant), 0) / chunk.length
       return {
         d,
-        width: Math.max(0.07, width * (inner ? 0.55 : 1.45) * depthWeight),
+        width: Math.max(0.07, width * (inner ? 0.5 : 1.2) * depthWeight),
         color: inner
-          ? `hsl(${27 + chunk[0].tone * 10} 48% ${32 + chunk[0].depthVisual * 8}%)`
-          : `hsl(${19 + chunk[0].tone * 9} 48% ${18 + chunk[0].depthVisual * 6}%)`,
+          ? `hsl(${28 + chunk[0].tone * 12} 39% ${40 + chunk[0].depthVisual * 9}%)`
+          : `hsl(${20 + chunk[0].tone * 10} 36% ${25 + chunk[0].depthVisual * 8}%)`,
         key: `${chunk[0].branchPersistentId}-${index}-${inner}`,
       }
     }))
@@ -80,13 +104,12 @@ function microPath(branches: BranchSegment[]) {
 }
 
 function regionLeaves(regions: CrownRegion[], density: number, screenScale: number) {
-  let leavesLeft = leafBudget
-  return regions.flatMap((region) => {
-    if (leavesLeft <= 0 || Math.max(region.radiusX, region.radiusY) * screenScale < 5) return []
-    const leaves = region.leaves.filter((leaf) => leaf.priority <= density && leaf.opacity > 0).slice(0, leavesLeft)
-    leavesLeft -= leaves.length
-    return leaves.map((leaf) => {
-      const size = leaf.size * leaf.opacity * (0.65 + leaf.depthVisual * 0.35) * (0.55 + region.visibility * 0.45) * 1.7
+  return regions
+    .filter((region) => Math.max(region.radiusX, region.radiusY) * screenScale >= 5)
+    .flatMap((region) => region.leaves
+      .filter((leaf) => leaf.priority <= density && leaf.opacity > 0)
+      .map((leaf) => {
+      const size = leaf.size * leaf.opacity * (0.65 + leaf.depthVisual * 0.35) * (0.55 + region.visibility * 0.45) * 1.3
       const x = region.x + leaf.x
       const y = region.y + leaf.y
       return {
@@ -96,12 +119,11 @@ function regionLeaves(regions: CrownRegion[], density: number, screenScale: numb
         size: size * 2,
         cx: x,
         cy: y,
-        angle: -leaf.angle * 180 / Math.PI,
-        opacity: region.visibility * (0.42 + leaf.vitality * 0.46) * (0.78 + leaf.depthVisual * 0.22),
+        angle: leaf.angle * 180 / Math.PI - 90,
+        opacity: region.visibility * (0.9 + leaf.vitality * 0.1),
         key: leaf.id,
       }
-    })
-  })
+    }))
 }
 
 export function PlantSvg({
@@ -110,6 +132,7 @@ export function PlantSvg({
   regenerateRequest,
   resetRequest,
   follow,
+  serverGrowth,
   onTimeChange,
   onRestore,
 }: {
@@ -118,6 +141,7 @@ export function PlantSvg({
   regenerateRequest: number
   resetRequest: number
   follow: boolean
+  serverGrowth?: number
   onTimeChange: (time: GrowthTime) => void
   onRestore: (config: RestoredConfig) => void
 }) {
@@ -136,8 +160,10 @@ export function PlantSvg({
   const storageReadyRef = useRef(false)
   const persistTimerRef = useRef<number | undefined>(undefined)
   const followFrameRef = useRef<number | undefined>(undefined)
+  const serverGrowthRef = useRef<number | undefined>(undefined)
   const [scene, setScene] = useState(sceneRef.current)
   const [transform, setTransform] = useState<ViewTransform | undefined>(undefined)
+  const [skyOffset, setSkyOffset] = useState(0)
   configRef.current = config
 
   const publish = (nextScene: GrowthScene) => {
@@ -145,10 +171,19 @@ export function PlantSvg({
     setScene(nextScene)
   }
 
+  const applyTransform = (next: ViewTransform) => {
+    const constrained = constrainViewTransform(
+      next,
+      { width: VIEW_SIZE, height: VIEW_SIZE },
+    )
+    transformRef.current = constrained
+    setTransform(constrained)
+  }
+
   const fit = () => {
     const next = computeViewTransform(sceneRef.current.bounds, sceneRef.current.skeleton.root, { width: VIEW_SIZE, height: VIEW_SIZE }, 0.12)
-    transformRef.current = next
-    setTransform(next)
+    applyTransform(next)
+    setSkyOffset(0)
   }
 
   const persist = (immediate = false) => {
@@ -179,20 +214,16 @@ export function PlantSvg({
     const active = sceneRef.current.skeleton.activeChunk
     const currentTransform = transformRef.current
     if (!follow || !active || !currentTransform) return
-    const centerX = (active.bounds.minX + active.bounds.maxX) / 2
     const centerY = (active.bounds.minY + active.bounds.maxY) / 2
     const scale = currentTransform.scale * sceneRef.current.skeleton.growthScale
-    const targetX = VIEW_SIZE / 2 - (centerX - sceneRef.current.skeleton.root.x) * scale
     const targetY = VIEW_SIZE * 0.44 + (centerY - sceneRef.current.skeleton.root.y) * scale
     const animate = () => {
       const current = transformRef.current
       if (!current) return
-      const dx = targetX - current.rootX
       const dy = targetY - current.rootY
-      const next = { ...current, rootX: current.rootX + dx * 0.16, rootY: current.rootY + dy * 0.16 }
-      transformRef.current = next
-      setTransform(next)
-      if (Math.hypot(dx, dy) > 0.5) followFrameRef.current = requestAnimationFrame(animate)
+      const next = { ...current, rootY: current.rootY + dy * 0.16 }
+      applyTransform(next)
+      if (Math.abs(targetY - transformRef.current!.rootY) > 0.5) followFrameRef.current = requestAnimationFrame(animate)
     }
     followFrameRef.current = requestAnimationFrame(animate)
   }
@@ -214,6 +245,14 @@ export function PlantSvg({
         return
       }
       try {
+        if (serverGrowthRef.current !== undefined) {
+          engineRef.current = new TreeGrowthEngine(configRef.current)
+          publish(engineRef.current.setTotalGrowth(serverGrowthRef.current))
+          checkpointRef.current = engineRef.current.createCheckpoint()
+          storageReadyRef.current = true
+          fit()
+          return
+        }
         const engine = stored.checkpoint
           ? TreeGrowthEngine.restore(stored.checkpoint)
           : new TreeGrowthEngine({ ...stored.morphology, ...stored.appearance, progress: 0 })
@@ -222,7 +261,7 @@ export function PlantSvg({
         engine.setTotalGrowth(totalGrowth(stored.time))
         engineRef.current = engine
         publish(engine.scene())
-        checkpointRef.current = stored.checkpoint ?? engine.createCheckpoint()
+        checkpointRef.current = engine.createCheckpoint()
         storageReadyRef.current = true
         onRestore({ ...stored.morphology, ...stored.appearance, progress: stored.time.progress, time: stored.time })
         fit()
@@ -245,6 +284,17 @@ export function PlantSvg({
   }, [])
 
   useEffect(() => {
+    if (serverGrowth !== undefined && serverGrowthRef.current !== serverGrowth) {
+      serverGrowthRef.current = serverGrowth
+      engineRef.current = new TreeGrowthEngine(config)
+      publish(engineRef.current.setTotalGrowth(serverGrowth))
+      morphologyRequestRef.current = { branching: config.branching, curvature: config.curvature }
+      checkpointRef.current = engineRef.current.createCheckpoint()
+      fit()
+      persist(true)
+      onTimeChange(sceneRef.current.skeleton.time)
+      return
+    }
     if (resetRequestRef.current !== resetRequest) {
       resetRequestRef.current = resetRequest
       engineRef.current = new TreeGrowthEngine(config)
@@ -284,7 +334,7 @@ export function PlantSvg({
       fit()
     } else followActive()
     persist(nextScene.skeleton.time.progress === 0)
-  }, [config.progress, config.branching, config.curvature, config.density, config.vitality, fitRequest, regenerateRequest, resetRequest, follow])
+  }, [config.progress, config.branching, config.curvature, config.density, config.vitality, fitRequest, regenerateRequest, resetRequest, follow, serverGrowth])
 
   const surfacePoint = (clientX: number, clientY: number) => {
     const surface = surfaceRef.current!
@@ -292,20 +342,7 @@ export function PlantSvg({
     return { x: (clientX - rect.left) * VIEW_SIZE / rect.width, y: (clientY - rect.top) * VIEW_SIZE / rect.height }
   }
 
-  const zoomAt = (point: Pointer, requestedFactor: number) => {
-    const current = transformRef.current
-    if (!current) return
-    const scale = clampZoom(current.scale * requestedFactor)
-    const factor = scale / current.scale
-    const next = {
-      ...current,
-      rootX: point.x + (current.rootX - point.x) * factor,
-      rootY: point.y + (current.rootY - point.y) * factor,
-      scale,
-    }
-    transformRef.current = next
-    setTransform(next)
-  }
+  const moveSky = (distance: number) => setSkyOffset((current) => Math.max(-160, Math.min(960, current + distance)))
 
   const resetGesture = () => {
     const points = [...pointersRef.current.values()]
@@ -328,19 +365,11 @@ export function PlantSvg({
     pointersRef.current.set(event.pointerId, surfacePoint(event.clientX, event.clientY))
     const points = [...pointersRef.current.values()]
     const previous = gestureRef.current
-    const current = transformRef.current
     if (points.length === 1) {
-      const next = { ...current, rootX: current.rootX + points[0].x - previous.center.x, rootY: current.rootY + points[0].y - previous.center.y }
-      transformRef.current = next
-      setTransform(next)
+      moveSky(previous.center.y - points[0].y)
     } else {
       const center = { x: (points[0].x + points[1].x) / 2, y: (points[0].y + points[1].y) / 2 }
-      const distance = Math.hypot(points[1].x - points[0].x, points[1].y - points[0].y)
-      zoomAt(previous.center, previous.distance > 0 ? distance / previous.distance : 1)
-      const zoomed = transformRef.current!
-      const next = { ...zoomed, rootX: zoomed.rootX + center.x - previous.center.x, rootY: zoomed.rootY + center.y - previous.center.y }
-      transformRef.current = next
-      setTransform(next)
+      moveSky(previous.center.y - center.y)
     }
     resetGesture()
   }
@@ -352,26 +381,16 @@ export function PlantSvg({
 
   const onWheel: WheelEventHandler<SVGSVGElement> = (event) => {
     event.preventDefault()
-    zoomAt(surfacePoint(event.clientX, event.clientY), Math.exp(-event.deltaY * 0.0015))
+    moveSky(-event.deltaY * 0.35)
   }
 
   const onKeyDown: KeyboardEventHandler<SVGSVGElement> = (event) => {
-    const current = transformRef.current
-    if (!current) return
-    const next = { ...current }
-    if (event.key === 'ArrowLeft') next.rootX += 24
-    else if (event.key === 'ArrowRight') next.rootX -= 24
-    else if (event.key === 'ArrowUp') next.rootY += 24
-    else if (event.key === 'ArrowDown') next.rootY -= 24
-    else if (event.key === '+' || event.key === '=') zoomAt({ x: VIEW_SIZE / 2, y: VIEW_SIZE / 2 }, 1.15)
-    else if (event.key === '-') zoomAt({ x: VIEW_SIZE / 2, y: VIEW_SIZE / 2 }, 1 / 1.15)
+    if (!transformRef.current) return
+    if (event.key === 'ArrowUp') moveSky(24)
+    else if (event.key === 'ArrowDown') moveSky(-24)
     else if (event.key.toLowerCase() === 'f') fit()
     else return
     event.preventDefault()
-    if (next.rootX !== current.rootX || next.rootY !== current.rootY) {
-      transformRef.current = next
-      setTransform(next)
-    }
   }
 
   const width = VIEW_SIZE
@@ -383,22 +402,37 @@ export function PlantSvg({
     ? plant.chunks.filter((chunk) => boundsOnScreen(chunk.bounds, plant, currentTransform, width, height))
     : []
   const chunkedCrown = plant.time.phase === 3
+  const allChunksVisible = visibleChunks.length === plant.chunks.length
   const microSource = chunkedCrown
-    ? [...visibleChunks.flatMap((chunk) => chunk.microBranches), ...(plant.activeChunk?.microBranches ?? [])]
+    ? [
+      ...(allChunksVisible ? scene.crown.microBranches : visibleChunks.flatMap((chunk) => chunk.microBranches)),
+      ...(plant.activeChunk?.microBranches ?? []),
+    ]
     : scene.crown.microBranches
   const regionSource = chunkedCrown
-    ? [...visibleChunks.flatMap((chunk) => chunk.regions), ...(plant.activeChunk?.regions ?? [])]
+    ? [
+      ...(allChunksVisible ? scene.crown.regions : visibleChunks.flatMap((chunk) => chunk.regions)),
+      ...(plant.activeChunk?.regions ?? []),
+    ]
     : scene.crown.regions
   const micro = currentTransform
-    ? selectRenderableMicroBranches(microSource, plant, currentTransform, width, height)
+    ? selectRenderableMicroBranches(
+      microSource,
+      scene.crown.density,
+      plant,
+      currentTransform,
+      width,
+      height,
+    )
     : []
   const regions = currentTransform
-    ? selectRenderableRegions(regionSource, plant, currentTransform, width, height)
+    ? selectRenderableRegions(regionSource, scene.crown.density, plant, currentTransform, width, height)
     : []
   const screenScale = currentTransform ? currentTransform.scale * plant.growthScale : 0
   const paths = branchPaths(plant, branches)
   const leaves = regionLeaves(regions, scene.crown.density, screenScale)
   const undergrowthOpacity = plant.time.phase < 2 ? 0 : 0.12 + Math.min(0.08, plant.time.phase === 3 ? plant.time.progress * 0.08 : 0.04)
+  const sceneOffset = skyOffset
 
   return <svg
     ref={surfaceRef}
@@ -415,56 +449,108 @@ export function PlantSvg({
     onKeyDown={onKeyDown}
   >
     <title id="plant-title">Procedurally generated tree</title>
-    <desc id="plant-description">Drag to pan, use wheel or pinch to zoom, and press F to fit.</desc>
+    <desc id="plant-description">Drag vertically or use the wheel to travel through the sky. Press F to reset the view.</desc>
     <defs>
-      <linearGradient id="plant-background" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0" stopColor="#f7f5ec" />
-        <stop offset="0.52" stopColor="#e7efe0" />
-        <stop offset="1" stopColor="#c4d1b9" />
+      <linearGradient id="plant-background" x1="0" y1="0" x2="0.08" y2="1">
+        <stop offset="0" stopColor="#060817" />
+        <stop offset="0.48" stopColor="#11162e" />
+        <stop offset="0.75" stopColor="#202141" />
+        <stop offset="1" stopColor="#302b48" />
       </linearGradient>
-      <radialGradient id="plant-light" cx="48%" cy="26%" r="78%">
-        <stop offset="0" stopColor="#fffdf4" stopOpacity="0.75" />
-        <stop offset="0.68" stopColor="#f0f3e5" stopOpacity="0.12" />
-        <stop offset="1" stopColor="#849879" stopOpacity="0.22" />
+      <radialGradient id="vortex-halo" cx="52%" cy="18%" r="62%">
+        <stop offset="0" stopColor="#adc8ff" stopOpacity="0.22" />
+        <stop offset="0.3" stopColor="#536aac" stopOpacity="0.1" />
+        <stop offset="1" stopColor="#081021" stopOpacity="0" />
       </radialGradient>
-      <radialGradient id="plant-ground" cx="50%" cy="100%" r="45%">
-        <stop offset="0" stopColor="#476732" stopOpacity="0.18" />
-        <stop offset="1" stopColor="#476732" stopOpacity="0" />
+      <radialGradient id="moonlight" cx="50%" cy="16%" r="70%">
+        <stop offset="0" stopColor="#b6c7ff" stopOpacity="0.16" />
+        <stop offset="0.58" stopColor="#6b6fbe" stopOpacity="0.045" />
+        <stop offset="1" stopColor="#080914" stopOpacity="0" />
       </radialGradient>
-      <radialGradient id="crown-cloud" cx="50%" cy="45%" r="65%">
-        <stop offset="0" stopColor="#6e9e55" stopOpacity="0.2" />
-        <stop offset="0.58" stopColor="#5c914c" stopOpacity="0.08" />
-        <stop offset="1" stopColor="#3b7030" stopOpacity="0" />
-      </radialGradient>
+      <linearGradient id="far-hills" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stopColor="#252b4d" />
+        <stop offset="1" stopColor="#141b34" />
+      </linearGradient>
+      <linearGradient id="meadow" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stopColor="#293a42" />
+        <stop offset="0.55" stopColor="#172b32" />
+        <stop offset="1" stopColor="#0d1a25" />
+      </linearGradient>
       <radialGradient id="tree-shadow" cx="50%" cy="50%" r="50%">
-        <stop offset="0" stopColor="#34452c" stopOpacity="0.24" />
-        <stop offset="1" stopColor="#34452c" stopOpacity="0" />
+        <stop offset="0" stopColor="#02050b" stopOpacity="0.72" />
+        <stop offset="1" stopColor="#02050b" stopOpacity="0" />
       </radialGradient>
       <filter id="branch-shadow" x="-20%" y="-20%" width="140%" height="140%">
-        <feDropShadow dx="0.25" dy="0.5" stdDeviation="0.35" floodColor="#2b211b" floodOpacity="0.28" />
+        <feDropShadow dx="0.25" dy="0.6" stdDeviation="0.45" floodColor="#02030a" floodOpacity="0.72" />
       </filter>
+      <filter id="star-glow" x="-100%" y="-100%" width="300%" height="300%">
+        <feGaussianBlur stdDeviation="1.2" result="blur" />
+        <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
+      </filter>
+      <clipPath id="flora-left"><path d="M 0 492 Q 86 452 190 480 L 184 640 L 0 640 Z" /></clipPath>
+      <clipPath id="flora-middle"><path d="M 194 504 Q 315 456 434 492 L 438 640 L 190 640 Z" /></clipPath>
+      <clipPath id="flora-right"><path d="M 442 482 Q 555 446 640 492 L 640 640 L 438 640 Z" /></clipPath>
     </defs>
     <rect width={width} height={height} fill="url(#plant-background)" />
-    <rect width={width} height={height} fill="url(#plant-light)" />
-    <rect y={height * 0.82} width={width} height={height * 0.18} fill="url(#plant-ground)" />
-    <ellipse cx={width * 0.5} cy={height * 0.84} rx={width * 0.25} ry={height * 0.035} fill="url(#tree-shadow)" />
-    <image
-      href={floraStrip}
-      x="0"
-      y={height * 0.7}
-      width={width}
-      height={height * 0.3}
-      preserveAspectRatio="xMidYMax slice"
-      opacity={undergrowthOpacity}
-      aria-hidden="true"
-    />
+    <rect width={width} height={height} fill="url(#vortex-halo)" />
+    <g filter="url(#star-glow)" aria-hidden="true">
+      {starStreaks.map((star) => <rect
+        key={`streak-${star.key}`}
+        x={star.x}
+        y={star.y}
+        width={star.length}
+        height="0.7"
+        rx="0.35"
+        fill="#c7dcff"
+        opacity={star.opacity}
+        transform={`rotate(${star.angle} ${star.x} ${star.y})`}
+      />)}
+      {starField.map((star) => <circle key={`star-${star.key}`} cx={star.x} cy={star.y} r={star.radius} fill="#e6edff" opacity={star.opacity} />)}
+    </g>
+    <rect width={width} height={height} fill="url(#moonlight)" />
+    <g transform={`translate(0 ${sceneOffset})`}>
+    <path d="M 0 445 Q 84 386 177 433 T 360 417 T 640 427 L 640 640 L 0 640 Z" fill="url(#far-hills)" opacity="0.95" />
+    <path d="M 0 485 Q 90 445 172 480 T 340 458 T 505 482 T 640 452 L 640 640 L 0 640 Z" fill="url(#meadow)" />
+    <path d="M 0 528 Q 90 487 185 518 T 360 500 T 520 522 T 640 495 L 640 640 L 0 640 Z" fill="#102730" opacity="0.94" />
+    <g opacity={undergrowthOpacity}>
+      <g clipPath="url(#flora-left)"><image href={floraStrip} x="-145" y="444" width="780" height="311" preserveAspectRatio="none" /></g>
+      <g clipPath="url(#flora-middle)"><image href={floraStrip} x="-286" y="454" width="870" height="347" preserveAspectRatio="none" /></g>
+      <g clipPath="url(#flora-right)"><image href={floraStrip} x="-444" y="438" width="920" height="366" preserveAspectRatio="none" /></g>
+    </g>
+    <g opacity={Math.min(0.95, undergrowthOpacity * 4)}>
+      <path d="M 0 570 Q 104 535 206 564 T 402 552 T 640 562 L 640 640 L 0 640 Z" fill="#0a1b25" />
+      <g clipPath="url(#flora-left)"><image href={floraStrip} x="-62" y="494" width="756" height="301" preserveAspectRatio="none" /></g>
+      <g clipPath="url(#flora-middle)"><image href={floraStrip} x="-314" y="500" width="880" height="350" preserveAspectRatio="none" /></g>
+      <g clipPath="url(#flora-right)"><image href={floraStrip} x="-457" y="486" width="842" height="335" preserveAspectRatio="none" /></g>
+    </g>
+    {currentTransform && <g transform={`translate(${currentTransform.rootX} ${currentTransform.rootY})`} aria-hidden="true">
+      <ellipse cx="0" cy="10" rx="112" ry="17" fill="url(#tree-shadow)" />
+      <path d="M -92 25 Q -72 -1 -35 7 Q -6 -9 26 5 Q 65 -2 91 25 Q 76 41 40 39 Q 5 47 -34 40 Q -73 43 -92 25 Z" fill="#3d3240" />
+      <path d="M -76 25 Q -47 8 -19 17 Q 8 1 36 15 Q 63 10 78 27 Q 47 35 23 29 Q -13 40 -42 30 Q -64 35 -76 25 Z" fill="#57445a" opacity="0.75" />
+      <ellipse cx="-51" cy="29" rx="13" ry="6" fill="#705b61" opacity="0.65" />
+      <ellipse cx="48" cy="28" rx="11" ry="5" fill="#766066" opacity="0.58" />
+      <path d="M -18 7 l -7 -15 M -10 6 l 1 -17 M 19 7 l 7 -14 M 30 9 l 12 -11" fill="none" stroke="#667d69" strokeWidth="1.4" strokeLinecap="round" />
+    </g>}
     {currentTransform && <g transform={`translate(${currentTransform.rootX} ${currentTransform.rootY}) scale(${currentTransform.scale * plant.growthScale} ${-currentTransform.scale * plant.growthScale}) translate(${-plant.root.x} ${-plant.root.y})`}>
+      <g fill="none" strokeLinecap="round" strokeLinejoin="round" filter="url(#branch-shadow)">
+        {paths.map((path) => <path key={path.key} d={path.d} stroke={path.color} strokeWidth={path.width} />)}
+      </g>
+      <g fill="none" strokeLinecap="round">
+        {[false, true].flatMap((near) => [false, true].map((tip) => {
+          const layer = micro.filter((branch) => (branch.depthVisual >= 0.5) === near && (branch.branchProgress === 1) === tip)
+          if (layer.length === 0) return null
+          const width = layer.reduce((total, branch) => total + branch.width, 0) / layer.length
+          return <path
+            key={`micro-${near}-${tip}`}
+            d={microPath(layer)}
+            stroke={near ? 'rgba(151, 111, 77, 0.86)' : 'rgba(177, 146, 112, 0.5)'}
+            strokeWidth={width * (near ? 1.05 : 0.82)}
+          />
+        }))}
+      </g>
       <g>
         {regions.filter((region) => Math.max(region.radiusX, region.radiusY) * screenScale < 1.5).map((region) => (
-          <ellipse key={`soft-${region.anchorPersistentId}`} cx={region.x} cy={region.y} rx={region.radiusX} ry={region.radiusY} fill="#4d9a39" fillOpacity="0.2" />
-        ))}
-        {regions.filter((region) => Math.max(region.radiusX, region.radiusY) * screenScale >= 1.5).map((region) => (
-          <ellipse key={`cloud-${region.anchorPersistentId}`} cx={region.x} cy={region.y} rx={region.radiusX} ry={region.radiusY} fill="url(#crown-cloud)" opacity={region.visibility * (0.34 + region.depthVisual * 0.2)} />
+          <ellipse key={`soft-${region.id}`} cx={region.x} cy={region.y} rx={region.radiusX} ry={region.radiusY} fill="#4d9a39" fillOpacity="0.2" />
         ))}
         {leaves.map((leaf) => (
           <image
@@ -475,28 +561,13 @@ export function PlantSvg({
             width={leaf.size}
             height={leaf.size}
             preserveAspectRatio="xMidYMid meet"
-            transform={`rotate(${leaf.angle} ${leaf.cx} ${leaf.cy})`}
+            transform={`rotate(${leaf.angle} ${leaf.cx} ${leaf.cy}) translate(0 ${leaf.cy * 2}) scale(1 -1)`}
             opacity={leaf.opacity}
             aria-hidden="true"
           />
         ))}
       </g>
-      <g fill="none" strokeLinecap="round" strokeLinejoin="round" filter="url(#branch-shadow)">
-        {paths.map((path) => <path key={path.key} d={path.d} stroke={path.color} strokeWidth={path.width} />)}
-      </g>
-      <g fill="none" strokeLinecap="round">
-        {[false, true].map((near) => {
-          const layer = micro.filter((branch) => (branch.depthVisual >= 0.5) === near)
-          if (layer.length === 0) return null
-          const width = layer.reduce((total, branch) => total + branch.width, 0) / layer.length
-          return <path
-            key={`micro-${near}`}
-            d={microPath(layer)}
-            stroke={near ? 'rgba(91, 55, 29, 0.78)' : 'rgba(113, 77, 48, 0.45)'}
-            strokeWidth={width * (near ? 1.05 : 0.82)}
-          />
-        })}
-      </g>
     </g>}
+    </g>
   </svg>
 }

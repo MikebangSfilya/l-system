@@ -1,11 +1,5 @@
 import type { BranchSegment, CrownRegion, PlantSkeleton, ViewTransform } from './types.ts'
 
-const MAJOR_AXIS_BUDGET = 4000
-const DETAIL_AXIS_BUDGET = 2000
-const MICRO_BRANCH_BUDGET = 2000
-const REGION_BUDGET = 1000
-const LEAF_BUDGET = 900
-
 function screenPoint(x: number, y: number, plant: PlantSkeleton, transform: ViewTransform) {
   const scale = transform.scale * plant.growthScale
   return { x: transform.rootX + (x - plant.root.x) * scale, y: transform.rootY - (y - plant.root.y) * scale }
@@ -40,7 +34,7 @@ export function branchOnScreen(
   }, plant, transform, width, height)
 }
 
-function stableAxes(items: BranchSegment[], limit: number) {
+function stableAxes(items: BranchSegment[]) {
   const axes = new Map<string, BranchSegment[]>()
   for (const item of items) {
     const axis = axes.get(item.branchPersistentId)
@@ -49,7 +43,7 @@ function stableAxes(items: BranchSegment[], limit: number) {
   }
   return [...axes.values()]
     .sort((left, right) => left[0].birthEpoch - right[0].birthEpoch || left[0].id - right[0].id)
-    .slice(0, limit).flat()
+    .flat()
 }
 
 export function effectiveBranchWidth(branch: BranchSegment, plant: PlantSkeleton) {
@@ -59,11 +53,14 @@ export function effectiveBranchWidth(branch: BranchSegment, plant: PlantSkeleton
   const age = branch.birthEpoch < 0
     ? matureAge
     : Math.max(0, matureAge - branch.birthEpoch)
-  const supportScale = 1 + Math.log2(1 + support) * (branch.level <= 1 ? 0.09 : 0.045)
+  const supportScale = 1 + Math.log2(1 + support) * (branch.level <= 1 ? 0.06 : 0.035)
   const ageScale = branch.level === 0
-    ? Math.min(2.5, 1 + 0.08 * Math.log2(1 + age))
-    : branch.level === 1 ? Math.min(1.7, 1 + 0.04 * Math.log2(1 + age)) : 1
-  return branch.width * supportScale * ageScale * (0.55 + branch.visibility * 0.45)
+    ? Math.min(1.65, 1 + 0.045 * Math.log2(1 + age))
+    : branch.level === 1 ? Math.min(1.4, 1 + 0.03 * Math.log2(1 + age)) : 1
+  const taper = branch.birthEpoch < 0
+    ? 1 - Math.min(1, branch.branchProgress) * (branch.level === 0 ? 0.62 : 0.28)
+    : 1
+  return branch.width * supportScale * ageScale * taper * (0.55 + branch.visibility * 0.45)
 }
 
 export function selectRenderableBranches(
@@ -81,40 +78,42 @@ export function selectRenderableBranches(
       && (branch.level <= 2 || Math.hypot(branch.x2 - branch.x1, branch.y2 - branch.y1) * screenScale >= 0.75))
   const active = (plant.activeChunk?.branches ?? []).filter((branch) => branch.visibility > 0
     && branchOnScreen(branch, plant, transform, width, height))
-  const major = stableAxes(historical.filter(({ level }) => level <= 2), MAJOR_AXIS_BUDGET)
-  const detail = stableAxes(historical.filter(({ level }) => level > 2), DETAIL_AXIS_BUDGET)
+  const major = stableAxes(historical.filter(({ level }) => level <= 2))
+  const detail = stableAxes(historical.filter(({ level }) => level > 2))
   return major.concat(detail, active)
 }
 
 export function selectRenderableRegions(
   candidates: CrownRegion[],
+  density: number,
   plant: PlantSkeleton,
   transform: ViewTransform,
   width: number,
   height: number,
 ) {
   const scale = transform.scale * plant.growthScale
-  return candidates.filter((region) => {
-    if (region.visibility <= 0) return false
+  const selected: CrownRegion[] = []
+  for (const region of candidates) {
+    if (region.visibility <= 0 || region.priority > density) continue
     const center = screenPoint(region.x, region.y, plant, transform)
-    return center.x + region.radiusX * scale >= 0 && center.x - region.radiusX * scale <= width
-      && center.y + region.radiusY * scale >= 0 && center.y - region.radiusY * scale <= height
-  }).sort((left, right) => left.anchorId - right.anchorId).slice(0, REGION_BUDGET)
-    .sort((left, right) => left.depthVisual - right.depthVisual)
+    if (center.x + region.radiusX * scale >= 0 && center.x - region.radiusX * scale <= width
+      && center.y + region.radiusY * scale >= 0 && center.y - region.radiusY * scale <= height) selected.push(region)
+  }
+  return selected.sort((left, right) => left.depthVisual - right.depthVisual)
 }
 
 export function selectRenderableMicroBranches(
   branches: BranchSegment[],
+  density: number,
   plant: PlantSkeleton,
   transform: ViewTransform,
   width: number,
   height: number,
 ) {
   const screenScale = transform.scale * plant.growthScale
-  return branches.filter((branch) => branch.visibility > 0
+  if (screenScale < 1) return []
+  return branches.filter((branch) => branch.priority <= density
+    && branch.visibility > 0
     && Math.hypot(branch.x2 - branch.x1, branch.y2 - branch.y1) * screenScale >= 1
     && branchOnScreen(branch, plant, transform, width, height))
-    .sort((left, right) => left.birthEpoch - right.birthEpoch || left.id - right.id).slice(0, MICRO_BRANCH_BUDGET)
 }
-
-export const leafBudget = LEAF_BUDGET

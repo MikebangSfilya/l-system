@@ -71,6 +71,7 @@ export type FoliageAnchor = {
 }
 
 export type CrownRegion = {
+  id: PersistentId
   anchorId: number
   anchorPersistentId: PersistentId
   x: number
@@ -126,6 +127,7 @@ export type PlantSkeleton = {
 
 export type GrowthCheckpointV1 = {
   version: 1
+  crownVersion?: 10
   morphology: PlantMorphology
   appearance: PlantAppearance
   time: GrowthTime

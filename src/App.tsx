@@ -1,148 +1,179 @@
 import { useEffect, useState } from 'react'
+import type { FormEvent } from 'react'
 import { PlantSvg } from './PlantSvg.tsx'
+import { completeRoutine, createRoutine, getCompletions, getPlant, getRoutines } from './api.ts'
+import type { Plant, Routine } from './api.ts'
+import { demoTrees } from './demoTrees.ts'
 import type { GrowthTime, PlantConfig } from './plant/types.ts'
 
-const initialConfig: PlantConfig = {
-  progress: 0,
-  branching: 0.48,
-  density: 0.71,
-  curvature: 0.22,
-  vitality: 0.91,
-  seed: 12345,
-}
-
-const growthSliders = ['branching', 'curvature', 'density', 'vitality'] as const
-const phaseNames = ['Seedling', 'Structure', 'Canopy', 'Living tree'] as const
-
+const initialConfig: PlantConfig = { progress: 0, branching: 0.48, density: 0.71, curvature: 0.22, vitality: 0.91, seed: 12345 }
+const phaseNames = ['Росток', 'Ствол', 'Крона', 'Живое дерево'] as const
+const sliders = ['progress', 'branching', 'curvature', 'density', 'vitality'] as const
 export default function App() {
   const [config, setConfig] = useState(initialConfig)
-  const [draftSeed, setDraftSeed] = useState(initialConfig.seed)
   const [time, setTime] = useState<GrowthTime>({ phase: 0, epoch: 0, progress: 0 })
   const [fitRequest, setFitRequest] = useState(0)
   const [regenerateRequest, setRegenerateRequest] = useState(0)
-  const [resetRequest, setResetRequest] = useState(0)
-  const [follow, setFollow] = useState(false)
-  const [naturalGrowth, setNaturalGrowth] = useState(true)
-  const seedChanged = draftSeed !== config.seed
+  const [serverGrowth, setServerGrowth] = useState<number>()
+  const [routines, setRoutines] = useState<Routine[]>([])
+  const [completions, setCompletions] = useState<Array<{ routineId: number; completedAt: string }>>([])
+  const [routineName, setRoutineName] = useState('')
+  const [category, setCategory] = useState('health')
+  const [weight, setWeight] = useState(1)
+  const [coefficient, setCoefficient] = useState(1)
+  const [menuOpen, setMenuOpen] = useState(true)
+  const [demoMode, setDemoMode] = useState(false)
+  const [demoUser, setDemoUser] = useState('Анна')
+  const [loadingRoutines, setLoadingRoutines] = useState(true)
+  const [savingRoutine, setSavingRoutine] = useState(false)
+  const [completingId, setCompletingId] = useState<number>()
+  const [routineError, setRoutineError] = useState('')
+  const today = new Date().toISOString().slice(0, 10)
+  const completedIds = new Set(completions.filter((completion) => {
+    const routine = routines.find(({ id }) => id === completion.routineId)
+    return routine?.timeType.disposable || completion.completedAt.slice(0, 10) === today
+  }).map(({ routineId }) => routineId))
+  const selectedDemo = demoTrees.find(({ name }) => name === demoUser) ?? demoTrees[0]
 
-  const regenerate = () => {
-    setConfig((current) => ({ ...current, seed: draftSeed }))
-    setRegenerateRequest((request) => request + 1)
-  }
-
-  const resetGrowth = () => {
-    if (!window.confirm('Reset all growth for this tree?')) return
-    setNaturalGrowth(false)
-    setConfig((current) => ({ ...current, progress: 0 }))
-    setTime({ phase: 0, epoch: 0, progress: 0 })
-    setResetRequest((request) => request + 1)
+  const applyPlant = (plant: Plant) => {
+    setConfig((current) => ({ ...current, branching: plant.branching, density: plant.density, curvature: plant.curvature, vitality: plant.vitality, seed: plant.seed }))
+    setServerGrowth(plant.phase < 3 ? plant.phase + plant.phaseProgress : 3 + plant.epoch + plant.phaseProgress)
   }
 
   useEffect(() => {
-    if (!naturalGrowth) return
-    let frame = 0
-    let previous = performance.now()
-    const tick = (now: number) => {
-      const elapsed = Math.min(100, now - previous)
-      previous = now
-      const duration = time.phase < 3 ? 6_000 : 12_000
-      setConfig((current) => current.progress >= 1
-        ? current
-        : { ...current, progress: Math.min(1, current.progress + elapsed / duration) })
-      frame = requestAnimationFrame(tick)
+    void Promise.all([getRoutines(), getCompletions(), getPlant()]).then(([nextRoutines, nextCompletions, plant]) => {
+      setRoutines(nextRoutines)
+      setCompletions(nextCompletions)
+      applyPlant(plant)
+    }).catch((error: Error) => setRoutineError(error.message)).finally(() => setLoadingRoutines(false))
+  }, [])
+
+  const addRoutine = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    setSavingRoutine(true)
+    setRoutineError('')
+    try {
+      const routine = await createRoutine({ category, type: routineName, weight, coefficient, temporary: false, disposable: false })
+      setRoutines((current) => [...current, routine])
+      setRoutineName('')
+    } catch (error) {
+      setRoutineError(error instanceof Error ? error.message : 'Не удалось добавить рутину')
+    } finally {
+      setSavingRoutine(false)
     }
-    frame = requestAnimationFrame(tick)
-    return () => cancelAnimationFrame(frame)
-  }, [naturalGrowth, time.phase])
+  }
+
+  const complete = async (id: number) => {
+    setCompletingId(id)
+    setRoutineError('')
+    try {
+      const completion = await completeRoutine(id)
+      setCompletions((current) => [...current, completion])
+      applyPlant(await getPlant())
+    } catch (error) {
+      setRoutineError(error instanceof Error ? error.message : 'Не удалось отметить выполнение')
+    } finally {
+      setCompletingId(undefined)
+    }
+  }
+
+  const selectDemo = (demo: typeof demoTrees[number]) => {
+    setDemoUser(demo.name)
+    setConfig({ seed: demo.seed, branching: demo.branching, curvature: demo.curvature, density: demo.density, vitality: demo.vitality, progress: demo.progress })
+    if (demo.growth === 0) setTime({ phase: 0, epoch: 0, progress: 0 })
+    setServerGrowth(demo.growth)
+    setRegenerateRequest((request) => request + 1)
+  }
+
+  const randomSeed = () => {
+    setConfig((current) => ({ ...current, seed: crypto.getRandomValues(new Uint32Array(1))[0] }))
+    setRegenerateRequest((request) => request + 1)
+  }
 
   return (
-    <main>
-      <section className="controls">
-        <h1>Procedural tree</h1>
-        <p className="growth-status" aria-live="polite">{phaseNames[time.phase]}</p>
+    <main className={`app-shell${menuOpen ? '' : ' menu-closed'}`}>
+      <aside className="sidebar" aria-label="Меню">
+        <div className="sidebar-top">
+          <div className="brand"><span className="brand-mark">✦</span><strong>Tree tracker</strong></div>
+          <button className="menu-toggle" type="button" onClick={() => setMenuOpen((open) => !open)} aria-label={menuOpen ? 'Свернуть меню' : 'Открыть меню'}>{menuOpen ? '‹' : '›'}</button>
+        </div>
 
-        <label>
-          <span>progress</span>
-          <input
-            type="range"
-            min="0"
-            max="1"
-            step="0.01"
-            value={config.progress}
-            onChange={(event) => {
-              setNaturalGrowth(false)
-              const progress = event.currentTarget.valueAsNumber
-              if (progress >= config.progress) setConfig((current) => ({ ...current, progress }))
-            }}
-          />
-          <output>{config.progress.toFixed(2)}</output>
-        </label>
+        <div className="sidebar-content">
+          <section className="demo-users" aria-labelledby="demo-users-title">
+            <p className="eyebrow" id="demo-users-title">Демо-пользователь</p>
+            <div className="user-picker">
+              {demoTrees.map((demo) => <button key={demo.name} type="button" className={demoUser === demo.name ? 'user active' : 'user'} onClick={() => selectDemo(demo)}>
+                <span className="avatar">{demo.name[0]}</span><span>{demo.name}<small>{demo.label}</small></span>
+              </button>)}
+            </div>
+            <small>Параметры каждого дерева подобраны скриптом.</small>
+          </section>
 
-        {growthSliders.map((key) => <label key={key}>
-          <span>{key}</span>
-          <input
-            type="range"
-            min="0"
-            max="1"
-            step="0.01"
-            value={config[key]}
-            onChange={(event) => {
+          <section className="routines" aria-labelledby="routines-title">
+            <div className="section-heading"><div><p className="eyebrow">Сегодня</p><h1 id="routines-title">Рутины</h1></div><span>{completedIds.size}/{routines.length}</span></div>
+            <form onSubmit={addRoutine}>
+              <input value={routineName} onChange={(event) => setRoutineName(event.currentTarget.value)} placeholder="Новая рутина" required />
+              <select value={category} onChange={(event) => setCategory(event.currentTarget.value)} aria-label="Категория">
+                <option value="health">Здоровье</option><option value="study">Учёба</option><option value="personal">Личное</option>
+              </select>
+              <select aria-label="Вес рутины" value={weight} onChange={(event) => setWeight(Number(event.currentTarget.value))}>
+                {[1, 2, 3, 4, 5].map((value) => <option key={value} value={value}>Вес: {value}</option>)}
+              </select>
+              <select aria-label="Коэффициент рутины" value={coefficient} onChange={(event) => setCoefficient(Number(event.currentTarget.value))}>
+                {[1, 2, 3, 4, 5].map((value) => <option key={value} value={value}>× {value}</option>)}
+              </select>
+              <button className="add-routine" disabled={savingRoutine}>{savingRoutine ? 'Добавляем…' : '+ Добавить'}</button>
+            </form>
+            {routineError && <p className="routine-error" role="alert">{routineError}</p>}
+            {loadingRoutines ? <p className="muted">Загрузка…</p> : routines.length === 0 ? <p className="muted">Добавьте первую рутину.</p> : <ul>
+              {routines.map((routine) => <li key={routine.id} className={completedIds.has(routine.id) ? 'done' : ''}>
+                <span className="routine-name">{routine.type}<small>{routine.category} · {routine.weight * routine.coefficient} очков</small></span>
+                <button type="button" disabled={completedIds.has(routine.id) || completingId === routine.id} onClick={() => void complete(routine.id)}>
+                  {completedIds.has(routine.id) ? 'Готово' : completingId === routine.id ? '…' : 'Сделать'}
+                </button>
+              </li>)}
+            </ul>}
+          </section>
+        </div>
+      </aside>
+
+      <section className="tree-area">
+        <header className="tree-header">
+          <div><p className="eyebrow">Дерево {selectedDemo.name} · {selectedDemo.label}</p><h2>{phaseNames[time.phase]}</h2></div>
+          <div className="tree-actions">
+            <button className={demoMode ? 'demo-button active' : 'demo-button'} type="button" onClick={() => setDemoMode((open) => !open)} aria-pressed={demoMode}>Демо-показ</button>
+            <button className="fit-tree" type="button" onClick={() => setFitRequest((request) => request + 1)}>Показать целиком</button>
+          </div>
+        </header>
+        {demoMode && <section className="demo-controls" aria-label="Настройки демонстрации">
+          {sliders.map((key) => <label key={key}>
+            <span>{key}</span>
+            <input type="range" min="0" max="1" step="0.01" value={config[key]} onChange={(event) => {
               const value = event.currentTarget.valueAsNumber
               setConfig((current) => ({ ...current, [key]: value }))
-            }}
-          />
-          <output>{config[key].toFixed(2)}</output>
-        </label>)}
-
-        <fieldset>
-          <legend>New tree</legend>
-          <label>
-            <span>seed</span>
-            <input
-              type="number"
-              value={draftSeed}
-              onChange={(event) => {
-                const seed = event.currentTarget.valueAsNumber || 0
-                setDraftSeed(seed)
-              }}
-            />
-          </label>
-          <button type="button" onClick={() => setDraftSeed(crypto.getRandomValues(new Uint32Array(1))[0])}>Random seed</button>
-          <button type="button" disabled={!seedChanged} onClick={regenerate}>
-            Regenerate tree
-          </button>
-          {seedChanged && <small>Seed regeneration keeps the current growth time.</small>}
-        </fieldset>
-
-        <label className="follow-control">
-          <input type="checkbox" checked={naturalGrowth} onChange={(event) => setNaturalGrowth(event.currentTarget.checked)} />
-          <span>Natural growth</span>
-        </label>
-        <label className="follow-control">
-          <input type="checkbox" checked={follow} onChange={(event) => setFollow(event.currentTarget.checked)} />
-          <span>Follow active growth</span>
-        </label>
-        <button type="button" onClick={() => setFitRequest((request) => request + 1)}>Fit tree</button>
-        <button type="button" onClick={resetGrowth}>Reset growth</button>
-      </section>
-
-      <section className="preview">
-        <h2>Tree preview</h2>
+            }} />
+            <output>{config[key].toFixed(2)}</output>
+          </label>)}
+          <label className="seed-control"><span>seed</span><input type="number" value={config.seed} onChange={(event) => {
+            const seed = event.currentTarget.valueAsNumber
+            if (Number.isFinite(seed)) setConfig((current) => ({ ...current, seed }))
+          }} /></label>
+          <button type="button" onClick={randomSeed}>Новый seed</button>
+          <button type="button" onClick={() => setRegenerateRequest((request) => request + 1)}>Перестроить дерево</button>
+        </section>}
         <PlantSvg
           config={config}
           fitRequest={fitRequest}
           regenerateRequest={regenerateRequest}
-          resetRequest={resetRequest}
-          follow={follow}
+          resetRequest={0}
+          follow={false}
+          serverGrowth={serverGrowth}
           onTimeChange={(nextTime) => {
             setTime(nextTime)
-            setConfig((current) => nextTime.progress === current.progress
-              ? current
-              : { ...current, progress: nextTime.progress })
+            setConfig((current) => nextTime.progress === current.progress ? current : { ...current, progress: nextTime.progress })
           }}
           onRestore={(restored) => {
             setConfig(restored)
-            setDraftSeed(restored.seed)
             setTime(restored.time)
           }}
         />

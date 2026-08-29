@@ -1,6 +1,6 @@
 import { performance } from 'node:perf_hooks'
 import { TreeGrowthEngine } from '../src/plant/generator.ts'
-import { selectRenderableBranches } from '../src/plant/renderer.ts'
+import { boundsOnScreen, selectRenderableBranches, selectRenderableMicroBranches, selectRenderableRegions } from '../src/plant/renderer.ts'
 import { computeViewTransform } from '../src/plant/view.ts'
 import type { PlantConfig } from '../src/plant/types.ts'
 
@@ -28,6 +28,18 @@ for (const epochs of [10, 100, 1_000, 10_000]) {
   const transform = computeViewTransform(scene.bounds, scene.skeleton.root, { width: 640, height: 640 }, 0.12)
   const renderStart = performance.now()
   const selected = selectRenderableBranches(scene.skeleton, transform, 640, 640)
+  const visibleChunks = scene.skeleton.chunks.filter((chunk) => boundsOnScreen(chunk.bounds, scene.skeleton, transform, 640, 640))
+  const allChunksVisible = visibleChunks.length === scene.skeleton.chunks.length
+  const microCandidates = [
+    ...(allChunksVisible ? scene.crown.microBranches : visibleChunks.flatMap((chunk) => chunk.microBranches)),
+    ...(scene.skeleton.activeChunk?.microBranches ?? []),
+  ]
+  const regionCandidates = [
+    ...(allChunksVisible ? scene.crown.regions : visibleChunks.flatMap((chunk) => chunk.regions)),
+    ...(scene.skeleton.activeChunk?.regions ?? []),
+  ]
+  const selectedMicroBranches = selectRenderableMicroBranches(microCandidates, scene.crown.density, scene.skeleton, transform, 640, 640)
+  const selectedRegions = selectRenderableRegions(regionCandidates, scene.crown.density, scene.skeleton, transform, 640, 640)
   const renderSelectionMs = performance.now() - renderStart
   const checkpointBytes = new TextEncoder().encode(JSON.stringify(engine.createCheckpoint())).byteLength
 
@@ -42,6 +54,8 @@ for (const epochs of [10, 100, 1_000, 10_000]) {
     chunks: scene.skeleton.chunks.length,
     selectedAxes: new Set(selected.map(({ branchPersistentId }) => branchPersistentId)).size,
     selectedSegments: selected.length,
+    selectedMicroBranches: selectedMicroBranches.length,
+    selectedRegions: selectedRegions.length,
     checkpointMiB: +(checkpointBytes / 1024 / 1024).toFixed(3),
     heapMiB: +(process.memoryUsage().heapUsed / 1024 / 1024).toFixed(1),
   })
